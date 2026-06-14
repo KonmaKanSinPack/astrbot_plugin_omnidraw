@@ -218,6 +218,59 @@ https://github.com/diaomin66/astrbot_plugin_omnidraw/
 
 ---
 
+## 给其他插件调用并获取图片
+
+默认的 LLM 工具 `generate_image` 行为保持不变：生成后会直接把图片下发到当前聊天，并返回“已成功下发 N 张图”的文本。
+
+如果其他插件需要“调用万象画卷生图，然后自己拿到图片继续处理”，请显式传入 `return_result=true`。此时不会自动下发图片，而是返回 JSON 字符串：
+
+```json
+{
+  "success": true,
+  "message": "已成功生成 1 张图片。",
+  "images": [
+    {
+      "image_url": "https://example.com/out.png",
+      "source_type": "url",
+      "url": "https://example.com/out.png",
+      "file_path": "",
+      "data_url": "",
+      "content_type": "image/png",
+      "provider_id": "image_node_1",
+      "model": "gpt-image-1",
+      "elapsed_seconds": 12.3,
+      "prompt": "实际用于请求的提示词"
+    }
+  ],
+  "count": 1,
+  "requested_count": 1
+}
+```
+
+可选参数：
+
+- `return_result=true`：启用返回式生图；不传或为 `false` 时保持原自动下发行为。
+- `refs`：参考图 URL、本地路径或 data URL；多个参考图可用换行分隔，也可传 JSON 数组字符串。
+- `aspect_ratio`、`size`、`extra_params`：与普通 `generate_image` 一致。
+
+也可以调用 Web API：
+
+```http
+POST /astrbot_plugin_omnidraw/generate_image_for_plugin
+Content-Type: application/json
+
+{
+  "prompt": "一只橘猫坐在霓虹灯下",
+  "count": 1,
+  "refs": ["https://example.com/ref.png"],
+  "size": "1024x1024"
+}
+```
+
+Web API 返回同样的 JSON 结构。为了避免绕过具体用户上下文，Web API 不会自动扣用户额度；通过 `generate_image(return_result=true)` 且传入事件上下文时，会沿用原权限和额度逻辑。
+
+---
+
 ## 图片参考怎么用
 
 ### 图生图 / 改图

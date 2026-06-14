@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- 新增面向其他插件的“返回式生图”能力：`generate_image` 函数工具在显式传入 `return_result=true` 时不再自动下发图片，而是返回包含图片 URL/本地路径/元数据的 JSON；默认行为保持原样。
+- 新增 Web API `POST /astrbot_plugin_omnidraw/generate_image_for_plugin`，便于其他插件通过 HTTP 调用万象画卷生图并获取图片结果。
+
 ## 3.3.18
 
 - 新增 `/查看预设` 指令：无参数时只列出所有预设名，不展示提示词；带预设名时显示该预设详情。

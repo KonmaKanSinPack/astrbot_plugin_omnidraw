@@ -522,6 +522,152 @@ class ImageSuccessComponentsTest(unittest.TestCase):
         self.assertEqual(hidden, [{"type": "image", "url": "https://cdn.example.com/out.png"}])
 
 
+class FakeClientSession:
+    def __init__(self):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class PluginImageReturnTest(unittest.IsolatedAsyncioTestCase):
+    def _plugin(self):
+        plugin = object.__new__(OmniDrawPlugin)
+        plugin.data_dir = str(PLUGIN_DIR / ".pytest_cache" / "plugin_return")
+        plugin.plugin_config = types.SimpleNamespace(max_batch_count=4)
+        plugin.prompt_optimizer = types.SimpleNamespace(
+            optimize=lambda prompt, count, session=None: self._optimize(prompt, count)
+        )
+        plugin._refresh_from_native_config_if_changed = lambda: None
+        plugin._process_and_save_images = self._process_refs
+        plugin._parse_extra_params = lambda extra: {"model": "override-model"} if extra else {}
+        plugin._prune_cache_if_needed = lambda *args, **kwargs: None
+        plugin._recorded_count = 0
+        plugin._record_generated_images = lambda event, count=1: setattr(plugin, "_recorded_count", count)
+        plugin._permission_denied_message = lambda event: ""
+        plugin._image_quota_error_message = lambda event, count=1: ""
+        plugin._get_event_images = lambda event: []
+        return plugin
+
+    async def _optimize(self, prompt, count):
+        return [f"{prompt} #{index}" for index in range(1, count + 1)]
+
+    async def _process_refs(self, refs, session=None):
+        return [f"safe:{ref}" for ref in refs]
+
+    async def test_generate_images_for_plugin_returns_images_without_sending(self):
+        plugin = self._plugin()
+        calls = []
+        original_client_session = main_module.aiohttp.ClientSession
+        original_chain_manager = main_module.ChainManager
+
+        class FakeChainManager:
+            def __init__(self, config, session):
+                self.config = config
+                self.session = session
+
+            async def run_chain_with_metadata(self, chain_name, prompt, **kwargs):
+                calls.append((chain_name, prompt, kwargs))
+                return ChainRunResult(
+                    image_url=f"https://cdn.example.com/{len(calls)}.png",
+                    provider_id="node_1",
+                    model=kwargs.get("model", "model_a"),
+                    elapsed_seconds=1.5,
+                )
+
+        main_module.aiohttp.ClientSession = FakeClientSession
+        main_module.ChainManager = FakeChainManager
+        try:
+            result = await plugin.generate_images_for_plugin(
+                prompt="draw a cat",
+                count=2,
+                size="1024x1024",
+                extra_params="--model override-model",
+                refs=["https://example.com/ref.png"],
+            )
+        finally:
+            main_module.aiohttp.ClientSession = original_client_session
+            main_module.ChainManager = original_chain_manager
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["ref_count"], 1)
+        self.assertEqual(result["processed_ref_count"], 1)
+        self.assertEqual([image["url"] for image in result["images"]], [
+            "https://cdn.example.com/1.png",
+            "https://cdn.example.com/2.png",
+        ])
+        self.assertEqual(result["images"][0]["provider_id"], "node_1")
+        self.assertEqual(result["images"][0]["model"], "override-model")
+        self.assertEqual(calls[0][2]["user_refs"], ["safe:https://example.com/ref.png"])
+        self.assertEqual(calls[0][2]["size"], "1024x1024")
+
+    async def test_generate_image_tool_can_return_json_when_requested(self):
+        plugin = self._plugin()
+        plugin.generate_images_for_plugin = self._fake_generate_images_for_plugin
+
+        payload = await plugin.tool_generate_image(
+            event=object(),
+            prompt="draw a dog",
+            count=1,
+            return_result=True,
+            refs="https://example.com/ref.png",
+        )
+
+        data = json.loads(payload)
+        self.assertTrue(data["success"])
+        self.assertEqual(data["images"][0]["image_url"], "https://cdn.example.com/out.png")
+
+    async def _fake_generate_images_for_plugin(self, **kwargs):
+        self.assertEqual(kwargs["prompt"], "draw a dog")
+        self.assertIs(kwargs["record_usage"], True)
+        self.assertEqual(kwargs["refs"], "https://example.com/ref.png")
+        return {
+            "success": True,
+            "message": "ok",
+            "images": [{"image_url": "https://cdn.example.com/out.png"}],
+        }
+
+    async def test_existing_generate_image_tool_still_sends_images(self):
+        plugin = self._plugin()
+        send_calls = []
+        original_client_session = main_module.aiohttp.ClientSession
+        original_chain_manager = main_module.ChainManager
+
+        class FakeChainManager:
+            def __init__(self, config, session):
+                pass
+
+            async def run_chain_with_metadata(self, chain_name, prompt, **kwargs):
+                return ChainRunResult(
+                    image_url="https://cdn.example.com/old-tool.png",
+                    provider_id="node_1",
+                    model="model_a",
+                    elapsed_seconds=1.0,
+                )
+
+        async def fake_send_generated_images(event, results, *args, **kwargs):
+            send_calls.extend(results)
+            return len(results)
+
+        main_module.aiohttp.ClientSession = FakeClientSession
+        main_module.ChainManager = FakeChainManager
+        plugin._send_generated_images = fake_send_generated_images
+        try:
+            message = await plugin.tool_generate_image(object(), "draw a cat", count=1)
+        finally:
+            main_module.aiohttp.ClientSession = original_client_session
+            main_module.ChainManager = original_chain_manager
+
+        self.assertIn("已成功下发 1 张图", message)
+        self.assertEqual(len(send_calls), 1)
+        self.assertEqual(send_calls[0].image_url, "https://cdn.example.com/old-tool.png")
+        self.assertEqual(plugin._recorded_count, 1)
+
+
 class FastPresetListTest(unittest.TestCase):
     def _plugin(self, presets):
         plugin = object.__new__(OmniDrawPlugin)

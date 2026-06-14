@@ -160,6 +160,12 @@ class OmniDrawPlugin(Star):
             ["GET"],
             "获取万象画卷本地参考图预览",
         )
+        self.context.register_web_api(
+            f"/{PLUGIN_NAME}/generate_image_for_plugin",
+            self.generate_image_for_plugin_handler,
+            ["POST"],
+            "为其他插件生成图片并返回结果",
+        )
 
     def _resolve_data_dir(self) -> str:
         base_data_dir = str(get_astrbot_data_path())
@@ -747,6 +753,29 @@ class OmniDrawPlugin(Star):
 
         mime_type = mimetypes.guess_type(image_path)[0] or "image/png"
         return await send_file(image_path, mimetype=mime_type)
+
+    async def generate_image_for_plugin_handler(self):
+        payload = await request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"success": False, "message": "请求体必须是 JSON 对象。"}), 400
+
+        try:
+            result = await self.generate_images_for_plugin(
+                prompt=str(payload.get("prompt", "") or ""),
+                count=payload.get("count", 1),
+                aspect_ratio=str(payload.get("aspect_ratio", "") or ""),
+                size=str(payload.get("size", "") or ""),
+                extra_params=str(payload.get("extra_params", "") or ""),
+                refs=payload.get("refs", payload.get("user_refs", [])),
+                optimize=payload.get("optimize", True),
+                event=None,
+                record_usage=False,
+            )
+            status_code = 200 if result.get("success") else 500
+            return jsonify(result), status_code
+        except Exception as exc:
+            logger.error(f"[OmniDraw] 插件生图 API 失败: {exc}", exc_info=True)
+            return jsonify({"success": False, "message": f"画图失败 ({exc})。", "images": []}), 500
 
     async def save_config_handler(self):
         new_config = await request.get_json(silent=True)
@@ -1770,6 +1799,189 @@ class OmniDrawPlugin(Star):
 
         return None
 
+    def _as_plugin_image_refs(self, refs: Any) -> List[str]:
+        if refs is None:
+            return []
+        if isinstance(refs, str):
+            refs_text = refs.strip()
+            if not refs_text:
+                return []
+            if refs_text.startswith("["):
+                try:
+                    return self._as_plugin_image_refs(json.loads(refs_text))
+                except Exception:
+                    pass
+            if refs_text.startswith("data:image"):
+                return [refs_text]
+            refs_iterable = re.split(r"[\r\n]+", refs_text)
+        elif isinstance(refs, (list, tuple, set)):
+            refs_iterable = refs
+        else:
+            refs_iterable = [refs]
+
+        normalized = []
+        for ref in refs_iterable:
+            if isinstance(ref, dict):
+                ref = (
+                    ref.get("image_url")
+                    or ref.get("data_url")
+                    or ref.get("url")
+                    or ref.get("file_path")
+                    or ref.get("path")
+                    or ""
+                )
+            ref_text = str(ref or "").strip()
+            if ref_text:
+                normalized.append(ref_text)
+        return normalized
+
+    def _plugin_bool(self, value: Any, default: bool = True) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on", "启用", "是"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "禁用", "否"}:
+            return False
+        return default
+
+    def _serialize_plugin_image_result(
+        self,
+        result: Any,
+        index: int,
+        prompt: str = "",
+    ) -> Dict[str, Any]:
+        image_url = self._get_image_result_url(result)
+        source_type = "file"
+        url = ""
+        data_url = ""
+        file_path = ""
+        content_type = ""
+
+        if image_url.startswith("data:image"):
+            source_type = "data_url"
+            data_url = image_url
+            try:
+                image_bytes, content_type = split_data_url(image_url)
+                save_dir = os.path.join(self.data_dir, "temp_images")
+                file_path = save_image_bytes(image_bytes, save_dir, image_url, "plugin", index, content_type)
+                self._prune_cache_if_needed("temp_images", protected_paths=[file_path])
+            except Exception as exc:
+                logger.warning(f"[OmniDraw] 插件生图结果落盘失败: {exc}")
+        elif image_url.startswith("http"):
+            source_type = "url"
+            url = image_url
+            content_type = mimetypes.guess_type(image_url)[0] or ""
+        else:
+            file_path = os.path.abspath(image_url)
+            content_type = mimetypes.guess_type(file_path)[0] or ""
+
+        return {
+            "index": index,
+            "image_url": image_url,
+            "source_type": source_type,
+            "url": url,
+            "file_path": file_path,
+            "data_url": data_url,
+            "content_type": content_type,
+            "provider_id": getattr(result, "provider_id", ""),
+            "model": getattr(result, "model", ""),
+            "elapsed_seconds": getattr(result, "elapsed_seconds", None),
+            "prompt": prompt,
+        }
+
+    async def generate_images_for_plugin(
+        self,
+        prompt: str,
+        count: int = 1,
+        aspect_ratio: str = "",
+        size: str = "",
+        extra_params: str = "",
+        refs: Any = None,
+        optimize: bool = True,
+        event: Optional[AstrMessageEvent] = None,
+        record_usage: bool = False,
+    ) -> Dict[str, Any]:
+        """Generate image(s) for another plugin and return serializable image data.
+
+        This method deliberately does not call event.send(). Existing chat commands
+        and LLM tools keep their original "generate and send" behavior.
+        """
+        self._refresh_from_native_config_if_changed()
+        prompt = str(prompt or "").strip()
+        raw_refs = self._as_plugin_image_refs(refs)
+        if not prompt and not raw_refs:
+            return {"success": False, "message": "缺少 prompt 或 refs。", "images": []}
+
+        count = self._normalize_count(count)
+        if event is not None:
+            permission_error = self._permission_denied_message(event)
+            if permission_error:
+                return {"success": False, "message": permission_error, "images": []}
+            quota_error = self._image_quota_error_message(event, count)
+            if quota_error:
+                return {"success": False, "message": quota_error, "images": []}
+
+        generation_prompt = prompt or "根据参考图生成一张自然、清晰、符合原图语义的图片。"
+        errors = []
+        async with aiohttp.ClientSession() as session:
+            if self._plugin_bool(optimize, default=True):
+                optimized_prompts = await self.prompt_optimizer.optimize(generation_prompt, count, session=session)
+            else:
+                optimized_prompts = [generation_prompt] * count
+            optimized_prompts = [str(item or generation_prompt) for item in (optimized_prompts or [])[:count]]
+            while len(optimized_prompts) < count:
+                optimized_prompts.append(generation_prompt)
+
+            safe_refs = await self._process_and_save_images(raw_refs, session=session)
+            kwargs = {"user_refs": safe_refs} if safe_refs else {}
+            if aspect_ratio:
+                kwargs["aspect_ratio"] = aspect_ratio
+            if size:
+                kwargs["size"] = size
+            kwargs.update(self._parse_extra_params(extra_params))
+
+            chain_manager = ChainManager(self.plugin_config, session)
+            tasks = [
+                chain_manager.run_chain_with_metadata("text2img", optimized_prompt, **kwargs)
+                for optimized_prompt in optimized_prompts
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        images = []
+        for index, (optimized_prompt, result) in enumerate(zip(optimized_prompts, results), start=1):
+            if isinstance(result, Exception):
+                errors.append(repr(result))
+                continue
+            if not self._get_image_result_url(result):
+                errors.append(f"empty image result at index {index}")
+                continue
+            images.append(self._serialize_plugin_image_result(result, index, optimized_prompt))
+
+        if not images:
+            message = "所有绘图节点请求失败。"
+            if errors:
+                message = f"{message} {'; '.join(errors)}"
+            return {"success": False, "message": message, "images": [], "errors": errors}
+
+        if event is not None and record_usage:
+            self._record_generated_images(event, len(images))
+
+        response = {
+            "success": True,
+            "message": f"已成功生成 {len(images)} 张图片。",
+            "images": images,
+            "count": len(images),
+            "requested_count": count,
+            "ref_count": len(raw_refs),
+            "processed_ref_count": len(safe_refs),
+        }
+        if errors:
+            response["errors"] = errors
+        return response
+
     async def _send_generated_images(
         self,
         event: AstrMessageEvent,
@@ -2395,6 +2607,8 @@ class OmniDrawPlugin(Star):
         aspect_ratio: str = "",
         size: str = "",
         extra_params: str = "",
+        return_result: bool = False,
+        refs: str = "",
     ) -> str:
         """
         AI 画图工具。当用户提出明确的画面要求你画出来时调用此工具。
@@ -2404,12 +2618,27 @@ class OmniDrawPlugin(Star):
             aspect_ratio (string): 宽高比例，例如 1:1、3:4、9:16、16:9。
             size (string): 分辨率或尺寸参数，例如 1024x1024。
             extra_params (string): 其他模型参数透传，格式为 --key value，可同时传多个。
+            return_result (bool): 仅供其他插件显式调用时使用。为 true 时不自动下发图片，而是返回 JSON 图片结果。
+            refs (string): 仅在 return_result 为 true 时使用。参考图 URL、本地路径或 data URL；多个参考图可用换行分隔，也可传 JSON 数组字符串。
         """
         permission_error = self._permission_denied_message(event)
         if permission_error:
             return permission_error
 
         try:
+            if self._plugin_bool(return_result, default=False):
+                result = await self.generate_images_for_plugin(
+                    prompt=prompt,
+                    count=count,
+                    aspect_ratio=aspect_ratio,
+                    size=size,
+                    extra_params=extra_params,
+                    refs=refs or self._get_event_images(event),
+                    optimize=True,
+                    event=event,
+                    record_usage=True,
+                )
+                return json.dumps(result, ensure_ascii=False)
             count = self._normalize_count(count)
             quota_error = self._image_quota_error_message(event, count)
             if quota_error:
