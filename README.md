@@ -243,7 +243,9 @@ https://github.com/diaomin66/astrbot_plugin_omnidraw/
     }
   ],
   "count": 1,
-  "requested_count": 1
+  "requested_count": 1,
+  "mode": "text2img",
+  "chain": "text2img"
 }
 ```
 
@@ -252,6 +254,7 @@ https://github.com/diaomin66/astrbot_plugin_omnidraw/
 - `return_result=true`：启用返回式生图；不传或为 `false` 时保持原自动下发行为。
 - `refs`：参考图 URL、本地路径或 data URL；多个参考图可用换行分隔，也可传 JSON 数组字符串。
 - `aspect_ratio`、`size`、`extra_params`：与普通 `generate_image` 一致。
+- 自拍模式请调用现有 `generate_selfie(return_result=true)` 工具，不需要新增 `generate_selfie_image`。返回结构相同，`mode` 为 `selfie`，会按 `/自拍` 的逻辑构建人设提示词并优先走自拍链路；未传 `refs` 时使用当前激活人设参考图。
 
 也可以调用 Web API：
 
@@ -267,7 +270,7 @@ Content-Type: application/json
 }
 ```
 
-Web API 返回同样的 JSON 结构。为了避免绕过具体用户上下文，Web API 不会自动扣用户额度；通过 `generate_image(return_result=true)` 且传入事件上下文时，会沿用原权限和额度逻辑。
+Web API 返回同样的 JSON 结构。自拍模式可传 `{"mode": "selfie", "action": "看着镜头微笑"}`，也兼容 `{"selfie": true}`。为了避免绕过具体用户上下文，Web API 不会自动扣用户额度；通过 `generate_image(return_result=true)` 或 `generate_selfie(return_result=true)` 且传入事件上下文时，会沿用原权限和额度逻辑。
 
 ---
 
