@@ -65,6 +65,7 @@ from .utils import handle_errors, save_image_bytes, split_data_url
 PAGE_PREVIEW_IMAGE_BYTES = 80 * 1024 * 1024
 NATIVE_ACTIVE_PERSONA_FILE_PREFIX = "files/persona_config/persona_ref_image/"
 CACHE_DIR_NAMES = ("temp_images", "user_refs")
+PLUGIN_RESULT_ERROR_MAX_LENGTH = 240
 CACHE_IMAGE_EXTENSIONS = frozenset({
     ".png",
     ".jpg",
@@ -777,7 +778,11 @@ class OmniDrawPlugin(Star):
             return jsonify(result), status_code
         except Exception as exc:
             logger.error(f"[OmniDraw] 插件生图 API 失败: {exc}", exc_info=True)
-            return jsonify({"success": False, "message": f"画图失败 ({exc})。", "images": []}), 500
+            return jsonify({
+                "success": False,
+                "message": f"画图失败 ({self._safe_plugin_error_message(exc)})。",
+                "images": [],
+            }), 500
 
     async def save_config_handler(self):
         new_config = await request.get_json(silent=True)
@@ -1216,6 +1221,15 @@ class OmniDrawPlugin(Star):
                 if not img_ref.startswith("http"):
                     abs_path = os.path.abspath(img_ref)
                     if os.path.exists(abs_path):
+                        try:
+                            if os.path.getsize(abs_path) > MAX_IMAGE_BYTES:
+                                raise ValueError(f"图片超过大小限制 {MAX_IMAGE_BYTES // 1024 // 1024}MB")
+                        except OSError as exc:
+                            logger.warning(f"[OmniDraw] 本地参考图无法读取: {abs_path} ({exc})")
+                            continue
+                        except ValueError as exc:
+                            logger.warning(f"[OmniDraw] 本地参考图超过大小限制: {abs_path} ({exc})")
+                            continue
                         processed_paths.append(abs_path)
                     else:
                         logger.warning(f"[OmniDraw] 本地参考图不存在: {abs_path}")
@@ -1808,7 +1822,7 @@ class OmniDrawPlugin(Star):
             refs_text = refs.strip()
             if not refs_text:
                 return []
-            if refs_text.startswith("["):
+            if refs_text.startswith(("[", "{")):
                 try:
                     return self._as_plugin_image_refs(json.loads(refs_text))
                 except Exception:
@@ -1835,7 +1849,8 @@ class OmniDrawPlugin(Star):
             ref_text = str(ref or "").strip()
             if ref_text:
                 normalized.append(ref_text)
-        return normalized
+        seen = set()
+        return [ref for ref in normalized if not (ref in seen or seen.add(ref))]
 
     def _plugin_bool(self, value: Any, default: bool = True) -> bool:
         if isinstance(value, bool):
@@ -1854,6 +1869,32 @@ class OmniDrawPlugin(Star):
         if mode_text in {"selfie", "persona", "persona_selfie", "portrait", "自拍", "人设自拍"}:
             return "selfie"
         return "text2img"
+
+    def _normalize_plugin_prompts(self, prompts: Any, fallback_prompt: str, count: int) -> List[str]:
+        fallback_prompt = str(fallback_prompt or "").strip()
+        prompt_list = [
+            str(prompt or "").strip() or fallback_prompt
+            for prompt in (prompts or [])
+        ]
+        target_count = max(1, int(count or 1))
+        if len(prompt_list) < target_count:
+            prompt_list.extend([fallback_prompt] * (target_count - len(prompt_list)))
+        return prompt_list[:target_count]
+
+    def _safe_plugin_error_message(self, exc: Any) -> str:
+        text = str(exc or "").strip() or "未知错误"
+        text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}", r"\1<redacted>", text)
+        text = re.sub(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{7,}\b", "<redacted>", text)
+        text = re.sub(
+            r"(?i)\b(api[\s_-]*key|access[\s_-]*token|token|secret|authorization|password)\b"
+            r"\s*[:=]\s*['\"]?[^'\"\s,;})]+",
+            lambda match: f"{match.group(1)}=<redacted>",
+            text,
+        )
+        text = re.sub(r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+", "<image_data_url>", text)
+        if len(text) > PLUGIN_RESULT_ERROR_MAX_LENGTH:
+            text = text[: PLUGIN_RESULT_ERROR_MAX_LENGTH - 3].rstrip() + "..."
+        return text
 
     def _serialize_plugin_image_result(
         self,
@@ -1912,6 +1953,7 @@ class OmniDrawPlugin(Star):
     ) -> Dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             optimized_actions = await self.prompt_optimizer.optimize(prompt, count, session=session)
+            optimized_actions = self._normalize_plugin_prompts(optimized_actions, prompt, count)
             raw_refs = (
                 self._as_plugin_image_refs(refs)
                 if refs is not None
@@ -1954,7 +1996,9 @@ class OmniDrawPlugin(Star):
         refs: Any = None,
     ) -> Dict[str, Any]:
         async with aiohttp.ClientSession() as session:
-            optimized_actions = await self.prompt_optimizer.optimize(action or "看着镜头微笑", count, session=session)
+            fallback_action = action or "看着镜头微笑"
+            optimized_actions = await self.prompt_optimizer.optimize(fallback_action, count, session=session)
+            optimized_actions = self._normalize_plugin_prompts(optimized_actions, fallback_action, count)
             raw_refs = (
                 self._as_plugin_image_refs(refs)
                 if refs is not None
@@ -1997,12 +2041,11 @@ class OmniDrawPlugin(Star):
         images = []
         valid_results = []
         errors = []
-        for index, (result_prompt, result) in enumerate(
-            zip(generation.get("prompts", []), generation.get("results", [])),
-            start=1,
-        ):
+        prompts = list(generation.get("prompts", []) or [])
+        for index, result in enumerate(generation.get("results", []) or [], start=1):
+            result_prompt = str(prompts[index - 1]) if index <= len(prompts) else ""
             if isinstance(result, Exception):
-                errors.append(repr(result))
+                errors.append(self._safe_plugin_error_message(result))
                 continue
             if not self._get_image_result_url(result):
                 errors.append(f"empty image result at index {index}")
@@ -2708,6 +2751,13 @@ class OmniDrawPlugin(Star):
             return f"系统提示：已成功生成并下发了 {sent} 张图。"
         except Exception as exc:
             logger.error(f"[OmniDraw] LLM 自拍工具失败: {exc}", exc_info=True)
+            if self._plugin_bool(return_result, default=False):
+                return json.dumps({
+                    "success": False,
+                    "message": f"画图失败 ({self._safe_plugin_error_message(exc)})。",
+                    "images": [],
+                    "mode": "selfie",
+                }, ensure_ascii=False)
             return f"系统提示：画图失败 ({exc})。"
 
     @llm_tool(name="generate_image")
@@ -2770,6 +2820,13 @@ class OmniDrawPlugin(Star):
             return f"系统提示：已成功下发 {sent} 张图。"
         except Exception as exc:
             logger.error(f"[OmniDraw] LLM 画图工具失败: {exc}", exc_info=True)
+            if self._plugin_bool(return_result, default=False):
+                return json.dumps({
+                    "success": False,
+                    "message": f"画图失败 ({self._safe_plugin_error_message(exc)})。",
+                    "images": [],
+                    "mode": "text2img",
+                }, ensure_ascii=False)
             return f"系统提示：画图失败 ({exc})。"
 
     @llm_tool(name="generate_video")

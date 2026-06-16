@@ -272,6 +272,8 @@ Content-Type: application/json
 
 Web API 返回同样的 JSON 结构。自拍模式可传 `{"mode": "selfie", "action": "看着镜头微笑"}`，也兼容 `{"selfie": true}`。为了避免绕过具体用户上下文，Web API 不会自动扣用户额度；通过 `generate_image(return_result=true)` 或 `generate_selfie(return_result=true)` 且传入事件上下文时，会沿用原权限和额度逻辑。
 
+失败时同样返回 JSON（`success=false`、`images=[]`），便于调用方稳定解析；错误文本会自动脱敏 API Key、Bearer Token 和图片 Base64，避免把敏感信息透传给其他插件或聊天上下文。
+
 ---
 
 ## 图片参考怎么用

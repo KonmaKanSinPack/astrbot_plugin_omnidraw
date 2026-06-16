@@ -668,6 +668,27 @@ class PluginImageReturnTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["success"])
         self.assertEqual(data["images"][0]["image_url"], "https://cdn.example.com/out.png")
 
+    async def test_generate_image_tool_returns_json_error_when_return_result_fails(self):
+        plugin = self._plugin()
+
+        async def fail_generate_images_for_plugin(**kwargs):
+            raise RuntimeError("api_key=sk-secret1234567890 data:image/png;base64," + _long_b64())
+
+        plugin.generate_images_for_plugin = fail_generate_images_for_plugin
+
+        payload = await plugin.tool_generate_image(
+            event=object(),
+            prompt="draw a dog",
+            return_result=True,
+        )
+
+        data = json.loads(payload)
+        self.assertFalse(data["success"])
+        self.assertEqual(data["mode"], "text2img")
+        self.assertIn("api_key=<redacted>", data["message"])
+        self.assertNotIn("sk-secret", data["message"])
+        self.assertNotIn("data:image/png;base64", data["message"])
+
     async def _fake_generate_images_for_plugin(self, **kwargs):
         self.assertEqual(kwargs["prompt"], "draw a dog")
         self.assertIs(kwargs["record_usage"], True)
@@ -695,6 +716,26 @@ class PluginImageReturnTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(data["success"])
         self.assertEqual(data["mode"], "selfie")
         self.assertEqual(data["images"][0]["image_url"], "https://cdn.example.com/selfie-out.png")
+
+    async def test_generate_selfie_tool_returns_json_error_when_return_result_fails(self):
+        plugin = self._plugin()
+
+        async def fail_generate_images_for_plugin(**kwargs):
+            raise RuntimeError("Bearer secret-token-value-1234567890")
+
+        plugin.generate_images_for_plugin = fail_generate_images_for_plugin
+
+        payload = await plugin.tool_generate_selfie(
+            event=object(),
+            action="look at camera",
+            return_result=True,
+        )
+
+        data = json.loads(payload)
+        self.assertFalse(data["success"])
+        self.assertEqual(data["mode"], "selfie")
+        self.assertIn("Bearer <redacted>", data["message"])
+        self.assertNotIn("secret-token", data["message"])
 
     async def _fake_generate_selfie_for_plugin(self, **kwargs):
         self.assertEqual(kwargs["prompt"], "look at camera")
@@ -781,6 +822,68 @@ class PluginImageReturnTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(send_calls), 1)
         self.assertEqual(send_calls[0].image_url, "https://cdn.example.com/old-tool.png")
         self.assertEqual(plugin._recorded_count, 1)
+
+    def test_plugin_refs_accept_json_object_and_dedupe(self):
+        plugin = self._plugin()
+        refs = plugin._as_plugin_image_refs(json.dumps({
+            "url": "https://example.com/ref.png",
+        }))
+
+        self.assertEqual(refs, ["https://example.com/ref.png"])
+        self.assertEqual(
+            plugin._as_plugin_image_refs([
+                {"image_url": "https://example.com/ref.png"},
+                "https://example.com/ref.png",
+                {"path": "local.png"},
+            ]),
+            ["https://example.com/ref.png", "local.png"],
+        )
+
+    def test_plugin_prompt_normalization_preserves_requested_count(self):
+        plugin = self._plugin()
+
+        self.assertEqual(
+            plugin._normalize_plugin_prompts(["optimized"], "fallback", 3),
+            ["optimized", "fallback", "fallback"],
+        )
+        self.assertEqual(
+            plugin._normalize_plugin_prompts(["one", "two", "three"], "fallback", 2),
+            ["one", "two"],
+        )
+
+    def test_plugin_response_keeps_results_when_prompt_list_is_short_and_redacts_errors(self):
+        plugin = self._plugin()
+        response, valid_results = plugin._plugin_generation_response({
+            "prompts": ["first prompt"],
+            "results": [
+                ChainRunResult(
+                    image_url="https://cdn.example.com/one.png",
+                    provider_id="node_1",
+                    model="model-a",
+                    elapsed_seconds=1.0,
+                ),
+                ChainRunResult(
+                    image_url="https://cdn.example.com/two.png",
+                    provider_id="node_1",
+                    model="model-a",
+                    elapsed_seconds=1.0,
+                ),
+                RuntimeError("authorization=Bearer-secret-token-1234567890"),
+            ],
+            "requested_count": 3,
+            "raw_refs": [],
+            "safe_refs": [],
+            "mode": "text2img",
+            "chain": "text2img",
+        })
+
+        self.assertTrue(response["success"])
+        self.assertEqual(response["count"], 2)
+        self.assertEqual(len(valid_results), 2)
+        self.assertEqual(response["images"][0]["prompt"], "first prompt")
+        self.assertEqual(response["images"][1]["prompt"], "")
+        self.assertIn("authorization=<redacted>", response["errors"][0])
+        self.assertNotIn("Bearer-secret", response["errors"][0])
 
 
 class FastPresetListTest(unittest.TestCase):
