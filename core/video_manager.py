@@ -69,6 +69,21 @@ class VideoManager:
         api_kwargs = api_kwargs if isinstance(api_kwargs, dict) else {}
         return str(api_kwargs.get("model") or provider.model or "").strip()
 
+    def _apply_chain_defaults(self, api_kwargs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        request_kwargs = dict(api_kwargs or {})
+        if str(request_kwargs.get("size", "") or "").strip():
+            return request_kwargs
+        if str(request_kwargs.get("resolution", "") or "").strip():
+            return request_kwargs
+
+        default_size = ""
+        chain_default_sizes = getattr(self.config, "chain_default_sizes", {})
+        if isinstance(chain_default_sizes, dict):
+            default_size = str(chain_default_sizes.get("video", "") or "").strip()
+        if default_size:
+            request_kwargs["size"] = default_size
+        return request_kwargs
+
     async def _encode_image_to_base64(self, image_ref: str, session: aiohttp.ClientSession) -> str:
         try:
             content_type = ""
@@ -253,12 +268,13 @@ class VideoManager:
             return
 
         last_error = ""
+        request_kwargs = self._apply_chain_defaults(api_kwargs)
         try:
             async with aiohttp.ClientSession() as session:
                 for index, provider in enumerate(providers, start=1):
                     logger.info(f"🎬 [视频链路] 正在尝试节点 [{provider.id}] ({index}/{len(providers)})。")
                     try:
-                        video_url = await self._fetch_video_from_api(provider, prompt, session, image_urls, api_kwargs)
+                        video_url = await self._fetch_video_from_api(provider, prompt, session, image_urls, request_kwargs)
                         elapsed = time.perf_counter() - start_time
                         logger.info(f"✅ [视频任务完成] 节点 [{provider.id}] 成功，耗时: {elapsed:.2f} 秒，准备推送给用户。")
 
@@ -267,7 +283,7 @@ class VideoManager:
                         await event.send(event.chain_result([
                             Plain(self._build_success_text(
                                 elapsed,
-                                self._effective_request_model(provider, api_kwargs),
+                                self._effective_request_model(provider, request_kwargs),
                                 include_metadata=include_metadata,
                             )),
                             Video.fromURL(video_url),

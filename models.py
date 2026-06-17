@@ -60,6 +60,7 @@ class PluginConfig:
     providers: List[ProviderConfig]
     video_providers: List[ProviderConfig]
     chains: Dict[str, List[str]]
+    chain_default_sizes: Dict[str, str]
     presets: Dict[str, str]
     enable_optimizer: bool
     optimizer_model: str
@@ -153,6 +154,14 @@ class PluginConfig:
             "video": _parse_chain(router_conf.get("chain_video", "video_node_1")),
             "optimizer": _parse_chain(opt_conf.get("chain_optimizer", "node_1")),
         }
+        chain_default_sizes = {
+            "text2img": _normalize_optional_text(router_conf.get("chain_text2img_size", "")),
+            "selfie": _normalize_optional_text(router_conf.get("chain_selfie_size", "")),
+            "video": _normalize_optional_text(router_conf.get("chain_video_size", "")),
+        }
+        router_conf["chain_text2img_size"] = chain_default_sizes["text2img"]
+        router_conf["chain_selfie_size"] = chain_default_sizes["selfie"]
+        router_conf["chain_video_size"] = chain_default_sizes["video"]
 
         optimizer_model = str(opt_conf.get("optimizer_model", "")).strip()
         if not optimizer_model and providers:
@@ -235,6 +244,7 @@ class PluginConfig:
             providers=providers,
             video_providers=video_providers,
             chains=chains,
+            chain_default_sizes=chain_default_sizes,
             presets=presets_dict,
             enable_optimizer=_to_bool(opt_conf.get("enable_optimizer", True)),
             optimizer_model=optimizer_model or "gpt-4o-mini",
@@ -424,6 +434,10 @@ def _merge_unique_values(*values: Any) -> List[str]:
 def _normalize_reply_text(value: Any, default: str) -> str:
     text = str(value or "").strip()
     return text or default
+
+
+def _normalize_optional_text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def _to_bool(value: Any) -> bool:

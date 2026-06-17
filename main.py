@@ -490,6 +490,9 @@ class OmniDrawPlugin(Star):
                 "chain_text2img": "node_1",
                 "chain_selfie": "node_1",
                 "chain_video": "video_node_1",
+                "chain_text2img_size": "",
+                "chain_selfie_size": "",
+                "chain_video_size": "",
             }
             for key, default in route_defaults.items():
                 value = router_config.get(key)
@@ -770,7 +773,7 @@ class OmniDrawPlugin(Star):
                 prompt=str(payload.get("prompt", payload.get("action", "")) or ""),
                 count=payload.get("count", 1),
                 aspect_ratio=str(payload.get("aspect_ratio", "") or ""),
-                size=str(payload.get("size", "") or ""),
+                size=str(payload.get("size", payload.get("resolution", "")) or ""),
                 extra_params=str(payload.get("extra_params", "") or ""),
                 refs=payload.get("refs", payload.get("user_refs", [])),
                 mode="selfie" if "selfie" in payload and self._plugin_bool(payload.get("selfie"), default=False) else str(

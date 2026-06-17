@@ -420,6 +420,22 @@ class GenerationMetadataConfigTest(unittest.TestCase):
         self.assertTrue(config.show_generation_time)
         self.assertFalse(config.show_request_model)
 
+    def test_chain_default_sizes_are_normalized_from_router_config(self):
+        config = PluginConfig.from_dict(
+            {
+                "router_config": {
+                    "chain_text2img_size": " 1024x1024 ",
+                    "chain_selfie_size": "1024x1536",
+                    "chain_video_size": "1280x720",
+                }
+            },
+            str(PLUGIN_DIR),
+        )
+
+        self.assertEqual(config.chain_default_sizes["text2img"], "1024x1024")
+        self.assertEqual(config.chain_default_sizes["selfie"], "1024x1536")
+        self.assertEqual(config.chain_default_sizes["video"], "1280x720")
+
 
 class RuntimeConfigKeyTest(unittest.TestCase):
     def test_generation_metadata_keys_are_preserved_by_runtime_config_cleaner(self):
@@ -1168,7 +1184,50 @@ class ChainManagerMetadataTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.model, "override-model")
             self.assertGreaterEqual(result.elapsed_seconds, 0)
             self.assertEqual([call[0] for call in calls], ["primary", "backup"])
+            self.assertEqual(calls[0][2]["size"], "1024x1024")
+            self.assertEqual(calls[1][2]["size"], "1024x1024")
             self.assertEqual(await manager.run_chain("text2img", "draw a cat"), "https://cdn.example.com/out.png")
+        finally:
+            chain_manager_module.create_provider = original_create_provider
+
+    async def test_chain_default_size_is_used_when_request_omits_size(self):
+        config = PluginConfig.from_dict(
+            {
+                "providers": [
+                    {
+                        "id": "primary",
+                        "api_type": "openai_image",
+                        "base_url": "https://api.example.com/v1",
+                        "api_keys": "key-1",
+                        "model": "primary-model",
+                    }
+                ],
+                "router_config": {
+                    "chain_text2img": "primary",
+                    "chain_text2img_size": "1536x1024",
+                },
+            },
+            str(PLUGIN_DIR),
+        )
+        calls = []
+
+        class FakeProvider:
+            async def generate_image(self, prompt, **kwargs):
+                calls.append(kwargs)
+                return "https://cdn.example.com/out.png"
+
+        original_create_provider = chain_manager_module.create_provider
+        chain_manager_module.create_provider = lambda provider_config, session: FakeProvider()
+        try:
+            manager = ChainManager(config, session=object())
+            await manager.run_chain_with_metadata("text2img", "draw a cat")
+            await manager.run_chain_with_metadata("text2img", "draw a cat", size="1024x1024")
+            await manager.run_chain_with_metadata("text2img", "draw a cat", resolution="2048x2048")
+
+            self.assertEqual(calls[0]["size"], "1536x1024")
+            self.assertEqual(calls[1]["size"], "1024x1024")
+            self.assertNotIn("size", calls[2])
+            self.assertEqual(calls[2]["resolution"], "2048x2048")
         finally:
             chain_manager_module.create_provider = original_create_provider
 
@@ -1253,6 +1312,18 @@ class VideoSuccessMetadataTest(unittest.TestCase):
         self.assertNotIn("生成耗时", text)
         self.assertNotIn("请求模型", text)
         self.assertNotIn("veo-3", text)
+
+
+    def test_video_default_size_is_used_when_request_omits_size(self):
+        config = PluginConfig.from_dict(
+            {"router_config": {"chain_video_size": "1280x720"}},
+            str(PLUGIN_DIR),
+        )
+        manager = VideoManager(config)
+
+        self.assertEqual(manager._apply_chain_defaults({})["size"], "1280x720")
+        self.assertEqual(manager._apply_chain_defaults({"size": "1920x1080"})["size"], "1920x1080")
+        self.assertEqual(manager._apply_chain_defaults({"resolution": "720p"}), {"resolution": "720p"})
 
 
 class GeminiOfficialProviderTest(unittest.IsolatedAsyncioTestCase):

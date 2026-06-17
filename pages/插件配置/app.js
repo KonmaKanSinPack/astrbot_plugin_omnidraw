@@ -45,7 +45,14 @@ const mockConfig = {
         max_batch_count: 0,
         optimizer_custom_prompt: ""
     },
-    router_config: { chain_text2img: "node_1", chain_selfie: "node_1", chain_video: "video_node_1" },
+    router_config: {
+        chain_text2img: "node_1",
+        chain_selfie: "node_1",
+        chain_video: "video_node_1",
+        chain_text2img_size: "",
+        chain_selfie_size: "",
+        chain_video_size: ""
+    },
     presets: ["写真:daily smartphone portrait --size 1024x1024"],
     providers: [
         { id: "node_1", api_type: "openai_image", base_url: "https://api.example.com/v1", model: "gpt-image-1", available_models: ["gpt-image-1", "dall-e-3"], timeout: 60, api_keys: "" }
@@ -594,7 +601,9 @@ async function clearCache(btn) {
 const routeDefs = {
     text2img: {
         stateKey: "chain_text2img",
+        sizeKey: "chain_text2img_size",
         inputId: "route_img",
+        sizeInputId: "route_img_size",
         selectorId: "sel-route-img",
         backupSelectorId: "sel-route-img-backup",
         backupToggleId: "route_img_backup",
@@ -603,7 +612,9 @@ const routeDefs = {
     },
     selfie: {
         stateKey: "chain_selfie",
+        sizeKey: "chain_selfie_size",
         inputId: "route_selfie",
+        sizeInputId: "route_selfie_size",
         selectorId: "sel-route-selfie",
         backupSelectorId: "sel-route-selfie-backup",
         backupToggleId: "route_selfie_backup",
@@ -612,7 +623,9 @@ const routeDefs = {
     },
     video: {
         stateKey: "chain_video",
+        sizeKey: "chain_video_size",
         inputId: "route_video",
+        sizeInputId: "route_video_size",
         selectorId: "sel-route-video",
         backupSelectorId: "sel-route-video-backup",
         backupToggleId: "route_video_backup",
@@ -933,6 +946,9 @@ function bindBasicFields() {
     byId("route_img").value = routePrimary("text2img") || "node_1";
     byId("route_selfie").value = routePrimary("selfie") || "node_1";
     byId("route_video").value = routePrimary("video") || "video_node_1";
+    byId("route_img_size").value = state.router_config.chain_text2img_size || "";
+    byId("route_selfie_size").value = state.router_config.chain_selfie_size || "";
+    byId("route_video_size").value = state.router_config.chain_video_size || "";
     bindPersonaFields();
     byId("opt_enable").checked = Boolean(state.optimizer_config.enable_optimizer);
     byId("opt_style").value = state.optimizer_config.optimizer_style || "手机日常原生感";
@@ -970,6 +986,9 @@ function readBasicFields() {
     syncRouteFromHidden("text2img");
     syncRouteFromHidden("selfie");
     syncRouteFromHidden("video");
+    state.router_config.chain_text2img_size = byId("route_img_size").value.trim();
+    state.router_config.chain_selfie_size = byId("route_selfie_size").value.trim();
+    state.router_config.chain_video_size = byId("route_video_size").value.trim();
     writeActivePersonaFieldsFromForm();
     state.optimizer_config.enable_optimizer = byId("opt_enable").checked;
     state.optimizer_config.optimizer_style = byId("opt_style").value;
@@ -1427,6 +1446,9 @@ async function init() {
     state.router_config.chain_text2img = joinChain(splitChain(deepFind(route, ["chain_text2img"], "node_1"))) || "node_1";
     state.router_config.chain_selfie = joinChain(splitChain(deepFind(route, ["chain_selfie"], "node_1"))) || "node_1";
     state.router_config.chain_video = joinChain(splitChain(deepFind(route, ["chain_video"], "video_node_1"))) || "video_node_1";
+    state.router_config.chain_text2img_size = String(deepFind(route, ["chain_text2img_size"], "") || "").trim();
+    state.router_config.chain_selfie_size = String(deepFind(route, ["chain_selfie_size"], "") || "").trim();
+    state.router_config.chain_video_size = String(deepFind(route, ["chain_video_size"], "") || "").trim();
     state.route_backup_enabled = {
         text2img: splitChain(state.router_config.chain_text2img).length > 1,
         selfie: splitChain(state.router_config.chain_selfie).length > 1,
