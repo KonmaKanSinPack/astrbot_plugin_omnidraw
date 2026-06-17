@@ -139,35 +139,17 @@
         "hint": "默认 node_1。第一个 ID 是图像生成主节点，后面的 ID 是备用节点，例如：node_1,node_2,node_3。",
         "default": "node_1"
       },
-      "chain_text2img_size": {
-        "description": "图像生成默认尺寸",
-        "type": "string",
-        "hint": "留空使用调用参数或模型默认值。填写后，该链路每次调用默认使用此尺寸，例如 1024x1024；调用时传入 size 或 resolution 会优先生效。",
-        "default": ""
-      },
       "chain_selfie": {
         "description": "自拍链路",
         "type": "string",
         "hint": "默认 node_1。第一个 ID 是人设自拍主节点，后面的 ID 是备用节点；自拍会使用当前人设的参考图组。",
         "default": "node_1"
       },
-      "chain_selfie_size": {
-        "description": "人设自拍默认尺寸",
-        "type": "string",
-        "hint": "留空使用调用参数或模型默认值。填写后，该链路每次调用默认使用此尺寸，例如 1024x1536；调用时传入 size 或 resolution 会优先生效。",
-        "default": ""
-      },
       "chain_video": {
         "description": "视频链路",
         "type": "string",
         "hint": "默认 video_node_1。第一个 ID 是视频渲染主节点，后面的 ID 是备用节点，例如：video_node_1,video_node_2。",
         "default": "video_node_1"
-      },
-      "chain_video_size": {
-        "description": "视频渲染默认尺寸",
-        "type": "string",
-        "hint": "留空使用调用参数或模型默认值。填写后，该链路每次调用默认使用此尺寸，例如 1280x720；调用时传入 size 或 resolution 会优先生效。",
-        "default": ""
       }
     }
   },
@@ -227,6 +209,12 @@
             "type": "float",
             "hint": "图片建议 120-300；较慢接口可调高。",
             "default": 60
+          },
+          "default_size": {
+            "description": "默认尺寸",
+            "type": "string",
+            "hint": "留空使用调用参数或模型默认值。填写后，该节点每次调用默认使用此尺寸，例如 1024x1024；调用时传入 size 或 resolution 会优先生效。",
+            "default": ""
           }
         }
       }
@@ -287,6 +275,12 @@
             "type": "float",
             "hint": "视频生成通常较慢，建议 300 或更高。",
             "default": 300
+          },
+          "default_size": {
+            "description": "默认尺寸",
+            "type": "string",
+            "hint": "留空使用调用参数或模型默认值。填写后，该节点每次调用默认使用此尺寸，例如 1280x720；调用时传入 size 或 resolution 会优先生效。",
+            "default": ""
           }
         }
       }

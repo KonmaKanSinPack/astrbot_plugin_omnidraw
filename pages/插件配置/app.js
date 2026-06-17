@@ -45,20 +45,13 @@ const mockConfig = {
         max_batch_count: 0,
         optimizer_custom_prompt: ""
     },
-    router_config: {
-        chain_text2img: "node_1",
-        chain_selfie: "node_1",
-        chain_video: "video_node_1",
-        chain_text2img_size: "",
-        chain_selfie_size: "",
-        chain_video_size: ""
-    },
+    router_config: { chain_text2img: "node_1", chain_selfie: "node_1", chain_video: "video_node_1" },
     presets: ["写真:daily smartphone portrait --size 1024x1024"],
     providers: [
-        { id: "node_1", api_type: "openai_image", base_url: "https://api.example.com/v1", model: "gpt-image-1", available_models: ["gpt-image-1", "dall-e-3"], timeout: 60, api_keys: "" }
+        { id: "node_1", api_type: "openai_image", base_url: "https://api.example.com/v1", model: "gpt-image-1", available_models: ["gpt-image-1", "dall-e-3"], timeout: 60, default_size: "", api_keys: "" }
     ],
     video_providers: [
-        { id: "video_node_1", api_type: "async_task", base_url: "https://api.example.com/v1", model: "veo", available_models: ["veo"], timeout: 300, api_keys: "" }
+        { id: "video_node_1", api_type: "async_task", base_url: "https://api.example.com/v1", model: "veo", available_models: ["veo"], timeout: 300, default_size: "", api_keys: "" }
     ],
     verbose_report: false,
     show_generation_time: false,
@@ -601,9 +594,7 @@ async function clearCache(btn) {
 const routeDefs = {
     text2img: {
         stateKey: "chain_text2img",
-        sizeKey: "chain_text2img_size",
         inputId: "route_img",
-        sizeInputId: "route_img_size",
         selectorId: "sel-route-img",
         backupSelectorId: "sel-route-img-backup",
         backupToggleId: "route_img_backup",
@@ -612,9 +603,7 @@ const routeDefs = {
     },
     selfie: {
         stateKey: "chain_selfie",
-        sizeKey: "chain_selfie_size",
         inputId: "route_selfie",
-        sizeInputId: "route_selfie_size",
         selectorId: "sel-route-selfie",
         backupSelectorId: "sel-route-selfie-backup",
         backupToggleId: "route_selfie_backup",
@@ -623,9 +612,7 @@ const routeDefs = {
     },
     video: {
         stateKey: "chain_video",
-        sizeKey: "chain_video_size",
         inputId: "route_video",
-        sizeInputId: "route_video_size",
         selectorId: "sel-route-video",
         backupSelectorId: "sel-route-video-backup",
         backupToggleId: "route_video_backup",
@@ -916,6 +903,10 @@ function renderProviderCard(p, i, isVideo) {
                     <label>请求超时</label>
                     <input type="number" class="input-glass" value="${escapeHtml(p.timeout)}" min="1" data-sync="${prefix}-time" data-index="${i}">
                 </div>
+                <div class="form-group">
+                    <label>默认尺寸</label>
+                    <input type="text" class="input-glass" value="${escapeHtml(p.default_size || "")}" placeholder="${isVideo ? "1280x720" : "1024x1024"}" data-sync="${prefix}-size" data-index="${i}">
+                </div>
                 <div class="form-group full-width">
                     <label>API Keys</label>
                     <textarea class="input-glass" rows="3" data-sync="${prefix}-keys" data-index="${i}">${escapeHtml(p.api_keys)}</textarea>
@@ -946,9 +937,6 @@ function bindBasicFields() {
     byId("route_img").value = routePrimary("text2img") || "node_1";
     byId("route_selfie").value = routePrimary("selfie") || "node_1";
     byId("route_video").value = routePrimary("video") || "video_node_1";
-    byId("route_img_size").value = state.router_config.chain_text2img_size || "";
-    byId("route_selfie_size").value = state.router_config.chain_selfie_size || "";
-    byId("route_video_size").value = state.router_config.chain_video_size || "";
     bindPersonaFields();
     byId("opt_enable").checked = Boolean(state.optimizer_config.enable_optimizer);
     byId("opt_style").value = state.optimizer_config.optimizer_style || "手机日常原生感";
@@ -986,9 +974,6 @@ function readBasicFields() {
     syncRouteFromHidden("text2img");
     syncRouteFromHidden("selfie");
     syncRouteFromHidden("video");
-    state.router_config.chain_text2img_size = byId("route_img_size").value.trim();
-    state.router_config.chain_selfie_size = byId("route_selfie_size").value.trim();
-    state.router_config.chain_video_size = byId("route_video_size").value.trim();
     writeActivePersonaFieldsFromForm();
     state.optimizer_config.enable_optimizer = byId("opt_enable").checked;
     state.optimizer_config.optimizer_style = byId("opt_style").value;
@@ -1284,7 +1269,7 @@ function setupEventDelegation() {
         }
         if (act === "del-preset") animateDel("presets-container", state.presets, idx, renderPresets);
         if (act === "add-provider") {
-            state.providers.push({ id: `node_${state.providers.length + 1}`, api_type: "openai_image", base_url: "", model: "", available_models: [], api_keys: "", timeout: 60 });
+            state.providers.push({ id: `node_${state.providers.length + 1}`, api_type: "openai_image", base_url: "", model: "", available_models: [], api_keys: "", timeout: 60, default_size: "" });
             renderProviders();
             renderSelectors();
             animateAdd("providers-container");
@@ -1292,7 +1277,7 @@ function setupEventDelegation() {
         }
         if (act === "del-provider") animateDel("providers-container", state.providers, idx, renderProviders, renderSelectors);
         if (act === "add-video-provider") {
-            state.video_providers.push({ id: `video_node_${state.video_providers.length + 1}`, api_type: "async_task", base_url: "", model: "", available_models: [], api_keys: "", timeout: 300 });
+            state.video_providers.push({ id: `video_node_${state.video_providers.length + 1}`, api_type: "async_task", base_url: "", model: "", available_models: [], api_keys: "", timeout: 300, default_size: "" });
             renderVideoProviders();
             renderSelectors();
             animateAdd("video-providers-container");
@@ -1347,10 +1332,12 @@ function setupEventDelegation() {
         if (s === "prov-id") state.providers[i].id = v;
         if (s === "prov-url") state.providers[i].base_url = v;
         if (s === "prov-time") state.providers[i].timeout = parseFloat(v) || 60;
+        if (s === "prov-size") state.providers[i].default_size = v.trim();
         if (s === "prov-keys") state.providers[i].api_keys = v;
         if (s === "vid-id") state.video_providers[i].id = v;
         if (s === "vid-url") state.video_providers[i].base_url = v;
         if (s === "vid-time") state.video_providers[i].timeout = parseFloat(v) || 300;
+        if (s === "vid-size") state.video_providers[i].default_size = v.trim();
         if (s === "vid-keys") state.video_providers[i].api_keys = v;
         setDirty();
     });
@@ -1446,9 +1433,6 @@ async function init() {
     state.router_config.chain_text2img = joinChain(splitChain(deepFind(route, ["chain_text2img"], "node_1"))) || "node_1";
     state.router_config.chain_selfie = joinChain(splitChain(deepFind(route, ["chain_selfie"], "node_1"))) || "node_1";
     state.router_config.chain_video = joinChain(splitChain(deepFind(route, ["chain_video"], "video_node_1"))) || "video_node_1";
-    state.router_config.chain_text2img_size = String(deepFind(route, ["chain_text2img_size"], "") || "").trim();
-    state.router_config.chain_selfie_size = String(deepFind(route, ["chain_selfie_size"], "") || "").trim();
-    state.router_config.chain_video_size = String(deepFind(route, ["chain_video_size"], "") || "").trim();
     state.route_backup_enabled = {
         text2img: splitChain(state.router_config.chain_text2img).length > 1,
         selfie: splitChain(state.router_config.chain_selfie).length > 1,
@@ -1475,6 +1459,7 @@ async function init() {
             model,
             available_models: availableModels,
             timeout: p.timeout || p["超时时间(秒)"] || 60,
+            default_size: String(p.default_size || p.default_resolution || "").trim(),
             api_keys: normalizeTextAreaKeys(p.api_keys || p["API密钥"] || "")
         };
     });
@@ -1489,6 +1474,7 @@ async function init() {
             model,
             available_models: availableModels,
             timeout: p.timeout || p["超时时间(秒)"] || 300,
+            default_size: String(p.default_size || p.default_resolution || "").trim(),
             api_keys: normalizeTextAreaKeys(p.api_keys || p["API密钥"] || "")
         };
     });

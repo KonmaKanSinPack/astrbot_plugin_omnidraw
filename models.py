@@ -32,6 +32,7 @@ class ProviderConfig:
     api_keys: List[str]
     model: str
     timeout: float
+    default_size: str = ""
     available_models: List[str] = field(default_factory=list)
 
     @property
@@ -60,7 +61,6 @@ class PluginConfig:
     providers: List[ProviderConfig]
     video_providers: List[ProviderConfig]
     chains: Dict[str, List[str]]
-    chain_default_sizes: Dict[str, str]
     presets: Dict[str, str]
     enable_optimizer: bool
     optimizer_model: str
@@ -154,15 +154,6 @@ class PluginConfig:
             "video": _parse_chain(router_conf.get("chain_video", "video_node_1")),
             "optimizer": _parse_chain(opt_conf.get("chain_optimizer", "node_1")),
         }
-        chain_default_sizes = {
-            "text2img": _normalize_optional_text(router_conf.get("chain_text2img_size", "")),
-            "selfie": _normalize_optional_text(router_conf.get("chain_selfie_size", "")),
-            "video": _normalize_optional_text(router_conf.get("chain_video_size", "")),
-        }
-        router_conf["chain_text2img_size"] = chain_default_sizes["text2img"]
-        router_conf["chain_selfie_size"] = chain_default_sizes["selfie"]
-        router_conf["chain_video_size"] = chain_default_sizes["video"]
-
         optimizer_model = str(opt_conf.get("optimizer_model", "")).strip()
         if not optimizer_model and providers:
             optimizer_model = providers[0].model
@@ -244,7 +235,6 @@ class PluginConfig:
             providers=providers,
             video_providers=video_providers,
             chains=chains,
-            chain_default_sizes=chain_default_sizes,
             presets=presets_dict,
             enable_optimizer=_to_bool(opt_conf.get("enable_optimizer", True)),
             optimizer_model=optimizer_model or "gpt-4o-mini",
@@ -396,6 +386,7 @@ def _build_provider_config(raw_provider: Any, is_video: bool) -> ProviderConfig:
         api_keys=_split_csv_or_lines(raw_provider.get("api_keys", raw_provider.get("API密钥", ""))),
         model=model,
         timeout=_to_float(raw_provider.get("timeout", raw_provider.get("超时时间(秒)", default_timeout)), default_timeout, 1.0),
+        default_size=_normalize_optional_text(raw_provider.get("default_size", raw_provider.get("default_resolution", ""))),
         available_models=available_models,
     )
 

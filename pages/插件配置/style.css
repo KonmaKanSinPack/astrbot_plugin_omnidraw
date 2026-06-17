@@ -637,7 +637,6 @@ select.input-modern {
     display: grid;
     grid-template-areas:
         "primary toggle"
-        "size size"
         "backup backup";
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -654,24 +653,6 @@ select.input-modern {
     grid-area: primary;
     align-content: center;
     min-height: 42px;
-}
-
-.route-size-field {
-    display: grid;
-    grid-area: size;
-    grid-template-columns: auto minmax(180px, 280px);
-    align-items: center;
-    justify-content: start;
-    gap: 10px;
-    min-width: 0;
-    color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 800;
-}
-
-.route-size-field input {
-    min-height: 38px;
-    width: 100%;
 }
 
 .route-backup-panel {
@@ -1704,7 +1685,6 @@ select.input-modern {
     .route-control {
         grid-template-areas:
             "primary"
-            "size"
             "toggle"
             "backup";
         grid-template-columns: 1fr;
@@ -1719,10 +1699,6 @@ select.input-modern {
     .route-backup-panel {
         justify-content: space-between;
         width: 100%;
-    }
-
-    .route-size-field {
-        grid-template-columns: 1fr;
     }
 
     .route-control.has-backups-enabled .route-backup-selector {

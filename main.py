@@ -490,9 +490,6 @@ class OmniDrawPlugin(Star):
                 "chain_text2img": "node_1",
                 "chain_selfie": "node_1",
                 "chain_video": "video_node_1",
-                "chain_text2img_size": "",
-                "chain_selfie_size": "",
-                "chain_video_size": "",
             }
             for key, default in route_defaults.items():
                 value = router_config.get(key)

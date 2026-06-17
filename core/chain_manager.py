@@ -32,24 +32,20 @@ class ChainManager:
         override = kwargs.get("model") if isinstance(kwargs, dict) else None
         return str(override or default_model or "").strip()
 
-    def _apply_chain_defaults(self, chain_name: str, kwargs: Any) -> dict:
+    def _apply_provider_defaults(self, provider_config: Any, kwargs: Any) -> dict:
         request_kwargs = dict(kwargs or {})
         if str(request_kwargs.get("size", "") or "").strip():
             return request_kwargs
         if str(request_kwargs.get("resolution", "") or "").strip():
             return request_kwargs
 
-        default_size = ""
-        chain_default_sizes = getattr(self.config, "chain_default_sizes", {})
-        if isinstance(chain_default_sizes, dict):
-            default_size = str(chain_default_sizes.get(chain_name, "") or "").strip()
+        default_size = str(getattr(provider_config, "default_size", "") or "").strip()
         if default_size:
             request_kwargs["size"] = default_size
         return request_kwargs
 
     async def run_chain_with_metadata(self, chain_name: str, prompt: str, **kwargs: Any) -> ChainRunResult:
         raw_chain = self.config.chains.get(chain_name)
-        request_kwargs = self._apply_chain_defaults(chain_name, kwargs)
         chain = []
         seen = set()
         for provider_id in raw_chain or []:
@@ -85,6 +81,7 @@ class ChainManager:
             logger.info(f"🚀 [Chain] 正在将任务交由节点 [{provider_id}] 处理...")
             try:
                 provider = create_provider(provider_config, self.session)
+                request_kwargs = self._apply_provider_defaults(provider_config, kwargs)
                 result = await provider.generate_image(prompt, **request_kwargs)
                 logger.info(f"✅ [Chain] 节点 [{provider_id}] 创作成功！")
                 return ChainRunResult(

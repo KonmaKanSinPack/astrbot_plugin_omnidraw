@@ -420,21 +420,17 @@ class GenerationMetadataConfigTest(unittest.TestCase):
         self.assertTrue(config.show_generation_time)
         self.assertFalse(config.show_request_model)
 
-    def test_chain_default_sizes_are_normalized_from_router_config(self):
+    def test_provider_default_sizes_are_normalized(self):
         config = PluginConfig.from_dict(
             {
-                "router_config": {
-                    "chain_text2img_size": " 1024x1024 ",
-                    "chain_selfie_size": "1024x1536",
-                    "chain_video_size": "1280x720",
-                }
+                "providers": [{"id": "node_1", "default_size": " 1024x1024 "}],
+                "video_providers": [{"id": "video_node_1", "default_size": "1280x720"}],
             },
             str(PLUGIN_DIR),
         )
 
-        self.assertEqual(config.chain_default_sizes["text2img"], "1024x1024")
-        self.assertEqual(config.chain_default_sizes["selfie"], "1024x1536")
-        self.assertEqual(config.chain_default_sizes["video"], "1280x720")
+        self.assertEqual(config.providers[0].default_size, "1024x1024")
+        self.assertEqual(config.video_providers[0].default_size, "1280x720")
 
 
 class RuntimeConfigKeyTest(unittest.TestCase):
@@ -1190,7 +1186,7 @@ class ChainManagerMetadataTest(unittest.IsolatedAsyncioTestCase):
         finally:
             chain_manager_module.create_provider = original_create_provider
 
-    async def test_chain_default_size_is_used_when_request_omits_size(self):
+    async def test_provider_default_size_is_used_when_request_omits_size(self):
         config = PluginConfig.from_dict(
             {
                 "providers": [
@@ -1200,12 +1196,10 @@ class ChainManagerMetadataTest(unittest.IsolatedAsyncioTestCase):
                         "base_url": "https://api.example.com/v1",
                         "api_keys": "key-1",
                         "model": "primary-model",
+                        "default_size": "1536x1024",
                     }
                 ],
-                "router_config": {
-                    "chain_text2img": "primary",
-                    "chain_text2img_size": "1536x1024",
-                },
+                "router_config": {"chain_text2img": "primary"},
             },
             str(PLUGIN_DIR),
         )
@@ -1228,6 +1222,55 @@ class ChainManagerMetadataTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls[1]["size"], "1024x1024")
             self.assertNotIn("size", calls[2])
             self.assertEqual(calls[2]["resolution"], "2048x2048")
+        finally:
+            chain_manager_module.create_provider = original_create_provider
+
+    async def test_backup_provider_uses_its_own_default_size(self):
+        config = PluginConfig.from_dict(
+            {
+                "providers": [
+                    {
+                        "id": "primary",
+                        "api_type": "openai_image",
+                        "base_url": "https://api.example.com/v1",
+                        "api_keys": "key-1",
+                        "model": "primary-model",
+                        "default_size": "1024x1024",
+                    },
+                    {
+                        "id": "backup",
+                        "api_type": "openai_image",
+                        "base_url": "https://api.example.com/v1",
+                        "api_keys": "key-2",
+                        "model": "backup-model",
+                        "default_size": "1536x1024",
+                    },
+                ],
+                "router_config": {"chain_text2img": "primary,backup"},
+            },
+            str(PLUGIN_DIR),
+        )
+        calls = []
+
+        class FakeProvider:
+            def __init__(self, provider_config):
+                self.provider_config = provider_config
+
+            async def generate_image(self, prompt, **kwargs):
+                calls.append((self.provider_config.id, kwargs))
+                if self.provider_config.id == "primary":
+                    raise RuntimeError("primary failed")
+                return "https://cdn.example.com/out.png"
+
+        original_create_provider = chain_manager_module.create_provider
+        chain_manager_module.create_provider = lambda provider_config, session: FakeProvider(provider_config)
+        try:
+            manager = ChainManager(config, session=object())
+            result = await manager.run_chain_with_metadata("text2img", "draw a cat")
+
+            self.assertEqual(result.provider_id, "backup")
+            self.assertEqual(calls[0], ("primary", {"size": "1024x1024"}))
+            self.assertEqual(calls[1], ("backup", {"size": "1536x1024"}))
         finally:
             chain_manager_module.create_provider = original_create_provider
 
@@ -1314,16 +1357,17 @@ class VideoSuccessMetadataTest(unittest.TestCase):
         self.assertNotIn("veo-3", text)
 
 
-    def test_video_default_size_is_used_when_request_omits_size(self):
+    def test_video_provider_default_size_is_used_when_request_omits_size(self):
         config = PluginConfig.from_dict(
-            {"router_config": {"chain_video_size": "1280x720"}},
+            {"video_providers": [{"id": "video_node", "default_size": "1280x720"}]},
             str(PLUGIN_DIR),
         )
         manager = VideoManager(config)
+        provider = config.video_providers[0]
 
-        self.assertEqual(manager._apply_chain_defaults({})["size"], "1280x720")
-        self.assertEqual(manager._apply_chain_defaults({"size": "1920x1080"})["size"], "1920x1080")
-        self.assertEqual(manager._apply_chain_defaults({"resolution": "720p"}), {"resolution": "720p"})
+        self.assertEqual(manager._apply_provider_defaults(provider, {})["size"], "1280x720")
+        self.assertEqual(manager._apply_provider_defaults(provider, {"size": "1920x1080"})["size"], "1920x1080")
+        self.assertEqual(manager._apply_provider_defaults(provider, {"resolution": "720p"}), {"resolution": "720p"})
 
 
 class GeminiOfficialProviderTest(unittest.IsolatedAsyncioTestCase):
