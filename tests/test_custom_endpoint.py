@@ -892,6 +892,13 @@ class FastPresetListTest(unittest.TestCase):
         plugin.plugin_config = types.SimpleNamespace(presets=presets)
         return plugin
 
+    def _event(self, text, is_at_or_wake=True):
+        return types.SimpleNamespace(
+            message_str=text,
+            message_obj=types.SimpleNamespace(message_str=text, message=[]),
+            is_at_or_wake_command=is_at_or_wake,
+        )
+
     def test_fast_preset_list_only_contains_preset_names(self):
         plugin = self._plugin(
             {
@@ -933,6 +940,73 @@ class FastPresetListTest(unittest.TestCase):
         self.assertIn("名称：胶片少女", message)
         self.assertIn("提示词：35mm film portrait", message)
 
+    def test_compact_view_accepts_configured_astrbot_command_prefix(self):
+        plugin = self._plugin({"胶片少女": "35mm film portrait"})
+        plugin._configured_astrbot_command_prefixes = lambda: ["#"]
+
+        self.assertEqual(plugin._extract_compact_command_payload("#查看预设胶片少女", "查看预设"), "胶片少女")
+        self.assertEqual(plugin._extract_compact_command_payload("#查看预设 胶片少女", "查看预设"), "")
+        self.assertEqual(
+            plugin._extract_compact_command_payload("查看预设胶片少女", "查看预设", allow_bare=True),
+            "胶片少女",
+        )
+
+    def test_preset_trigger_accepts_configured_astrbot_command_prefix(self):
+        plugin = self._plugin(
+            {
+                "胶片少女": "35mm film portrait",
+                "胶片": "film photo",
+                "MECHA": "mecha cat",
+            }
+        )
+        plugin._configured_astrbot_command_prefixes = lambda: ["#", "!!"]
+
+        self.assertEqual(plugin._match_preset_trigger("#胶片少女"), "胶片少女")
+        self.assertEqual(plugin._match_preset_trigger("#胶片少女 参考这张图"), "胶片少女")
+        self.assertEqual(plugin._match_preset_trigger("!!胶片少女"), "胶片少女")
+        self.assertEqual(plugin._match_preset_trigger("#mecha"), "MECHA")
+        self.assertEqual(plugin._match_preset_trigger("#胶片少女风格"), "")
+        self.assertEqual(plugin._match_preset_trigger("胶片少女"), "")
+        self.assertEqual(plugin._parse_preset_trigger("胶片少女 皮肤白一点", allow_bare=True), ("胶片少女", "皮肤白一点"))
+        self.assertEqual(plugin._match_preset_trigger("胶片少女", allow_bare=True), "胶片少女")
+
+    def test_preset_trigger_accepts_actual_local_fullwidth_comma_prefix(self):
+        plugin = self._plugin({"胶片少女": "35mm film portrait"})
+        plugin._configured_astrbot_command_prefixes = lambda: ["，"]
+
+        self.assertEqual(plugin._match_preset_trigger("，胶片少女"), "胶片少女")
+        self.assertEqual(plugin._parse_preset_trigger("胶片少女", allow_bare=True), ("胶片少女", ""))
+
+    def test_preset_trigger_keeps_legacy_slash_prefix_compatibility(self):
+        plugin = self._plugin({"胶片少女": "35mm film portrait"})
+        plugin._configured_astrbot_command_prefixes = lambda: ["#"]
+
+        self.assertEqual(plugin._match_preset_trigger("/胶片少女"), "胶片少女")
+
+    def test_preset_commands_accept_colon_payload(self):
+        plugin = self._plugin({})
+
+        self.assertEqual(
+            plugin._extract_command_message_any(self._event("添加预设 胶片少女:35mm film portrait"), ("添加预设",)),
+            "胶片少女:35mm film portrait",
+        )
+        self.assertEqual(plugin._parse_preset_add_payload("胶片少女:35mm film portrait"), ("胶片少女", "35mm film portrait"))
+        self.assertEqual(plugin._parse_preset_add_payload("胶片少女：35mm film portrait"), ("胶片少女", "35mm film portrait"))
+        self.assertIn("不能包含冒号", plugin._validate_preset_name("坏：名字"))
+
+    def test_preset_generation_prompt_appends_extra_rules(self):
+        plugin = self._plugin({})
+
+        self.assertEqual(
+            plugin._build_preset_generation_prompt("35mm film portrait", "皮肤白一点"),
+            "35mm film portrait\nAdditional requirements: 皮肤白一点",
+        )
+
+    def test_config_presets_accept_fullwidth_colon_separator(self):
+        config = PluginConfig.from_dict({"presets": ["胶片少女：35mm film portrait"]}, str(PLUGIN_DIR))
+
+        self.assertEqual(config.presets["胶片少女"], "35mm film portrait")
+
     def test_fast_preset_list_handles_empty_presets(self):
         message = self._plugin({})._build_fast_preset_list_message()
 
@@ -959,6 +1033,87 @@ class FastPresetListTest(unittest.TestCase):
         self.assertEqual(plugin.plugin_config.presets["新预设"], "updated prompt")
         self.assertEqual(plugin._delete_preset("新预设"), "新预设")
         self.assertNotIn("新预设", plugin.plugin_config.presets)
+
+
+class PresetEventHandlerTest(unittest.IsolatedAsyncioTestCase):
+    def _plugin(self):
+        plugin = object.__new__(OmniDrawPlugin)
+        plugin.plugin_config = types.SimpleNamespace(
+            presets={"胶片少女": "35mm film portrait --size 1024x1024"},
+            draw_pending_message="正在生成 {command}: {prompt} 参数{param_count}",
+            persona_name="默认助理",
+            verbose_report=False,
+        )
+        plugin.cmd_parser = main_module.CommandParser()
+        plugin._permission_denied_message = lambda event: ""
+        plugin._image_quota_error_message = lambda event, count=1: ""
+        plugin._get_event_images = lambda *args, **kwargs: []
+        plugin._process_and_save_images = self._process_refs
+        plugin._recorded_count = 0
+        plugin._record_generated_images = lambda event, count=1: setattr(plugin, "_recorded_count", count)
+        plugin._build_image_success_components = lambda result, elapsed: [{"result": result.image_url}]
+        return plugin
+
+    async def _process_refs(self, refs, session=None):
+        return []
+
+    async def test_wake_command_with_prefix_stripped_triggers_preset_generation(self):
+        plugin = self._plugin()
+        calls = []
+        original_client_session = main_module.aiohttp.ClientSession
+        original_chain_manager = main_module.ChainManager
+
+        class FakeChainManager:
+            def __init__(self, config, session):
+                pass
+
+            async def run_chain_with_metadata(self, chain_name, prompt, **kwargs):
+                calls.append((chain_name, prompt, kwargs))
+                return ChainRunResult(
+                    image_url="https://cdn.example.com/preset.png",
+                    provider_id="node_1",
+                    model=kwargs.get("model", "model_a"),
+                    elapsed_seconds=1.0,
+                )
+
+        class FakeEvent:
+            is_at_or_wake_command = True
+
+            def __init__(self):
+                self.message_str = "胶片少女 皮肤白一点 --model test-model"
+                self.message_obj = types.SimpleNamespace(message_str=self.message_str, message=[], message_id="msg-1")
+                self.stopped = False
+
+            def stop_event(self):
+                self.stopped = True
+
+            def plain_result(self, text):
+                return ("plain", text)
+
+            def chain_result(self, chain):
+                return ("chain", chain)
+
+        event = FakeEvent()
+        main_module.aiohttp.ClientSession = FakeClientSession
+        main_module.ChainManager = FakeChainManager
+        try:
+            results = [item async for item in plugin.on_message_preset(event)]
+        finally:
+            main_module.aiohttp.ClientSession = original_client_session
+            main_module.ChainManager = original_chain_manager
+
+        self.assertTrue(event.stopped)
+        self.assertEqual(plugin._recorded_count, 1)
+        self.assertEqual(calls, [
+            (
+                "text2img",
+                "35mm film portrait\nAdditional requirements: 皮肤白一点",
+                {"size": "1024x1024", "model": "test-model"},
+            )
+        ])
+        self.assertEqual(results[0][0], "plain")
+        self.assertIn("胶片少女", results[0][1])
+        self.assertEqual(results[1], ("chain", [{"result": "https://cdn.example.com/preset.png"}]))
 
 
 class ChainManagerMetadataTest(unittest.IsolatedAsyncioTestCase):

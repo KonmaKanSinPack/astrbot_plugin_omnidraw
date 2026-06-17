@@ -82,6 +82,11 @@ CACHE_IMAGE_EXTENSIONS = frozenset({
 })
 DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS = 24
 DEFAULT_MAX_CACHE_SIZE_MB = 512
+LEGACY_COMMAND_PREFIXES = ("/", "!", "！", ".")
+PRESET_VIEW_COMMANDS = ("查看预设",)
+PRESET_LIST_COMMANDS = ("查看预设", "极速宏")
+PRESET_ADD_COMMANDS = ("添加预设",)
+PRESET_DELETE_COMMANDS = ("删除预设",)
 CONFIG_KEYS = {
     "permission_config",
     "persona_config",
@@ -1101,11 +1106,105 @@ class OmniDrawPlugin(Star):
             return ""
         return f"https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
 
+    def _extend_command_prefixes(self, prefixes: List[str], value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                self._extend_command_prefixes(prefixes, item)
+            return
+
+        prefix = str(value).strip()
+        if prefix not in prefixes:
+            prefixes.append(prefix)
+
+    def _configured_astrbot_command_prefixes(self) -> List[str]:
+        config_path = os.path.join(get_astrbot_data_path(), "cmd_config.json")
+        try:
+            stat = os.stat(config_path)
+            signature = f"{stat.st_mtime_ns}:{stat.st_size}"
+        except OSError:
+            signature = ""
+        if (
+            getattr(self, "_astrbot_cmd_prefix_config_path", "") == config_path
+            and getattr(self, "_astrbot_cmd_prefix_config_signature", None) == signature
+        ):
+            return list(getattr(self, "_astrbot_cmd_prefix_cache", []))
+
+        prefixes: List[str] = []
+        command_config = self._load_json_file(config_path)
+        self._extend_command_prefixes(prefixes, command_config.get("wake_prefix"))
+        self._extend_command_prefixes(prefixes, command_config.get("command_prefix"))
+        self._extend_command_prefixes(prefixes, command_config.get("command_prefixes"))
+
+        self._astrbot_cmd_prefix_config_path = config_path
+        self._astrbot_cmd_prefix_config_signature = signature
+        self._astrbot_cmd_prefix_cache = list(prefixes)
+        return prefixes
+
+    def _command_prefixes(self) -> List[str]:
+        prefixes: List[str] = []
+        self._extend_command_prefixes(prefixes, self._configured_astrbot_command_prefixes())
+        self._extend_command_prefixes(prefixes, LEGACY_COMMAND_PREFIXES)
+        return prefixes or ["/"]
+
+    def _command_text_without_prefix(self, text: str, allow_bare: bool = False) -> str:
+        text = str(text or "").strip()
+        if not text:
+            return ""
+
+        prefixes = self._command_prefixes()
+        for prefix in sorted((item for item in prefixes if item), key=len, reverse=True):
+            if text.startswith(prefix):
+                return text[len(prefix):].lstrip()
+
+        if allow_bare or "" in prefixes:
+            return text
+        return ""
+
+    def _event_is_at_or_wake_command(self, event: AstrMessageEvent) -> bool:
+        value = getattr(event, "is_at_or_wake_command", False)
+        if callable(value):
+            try:
+                value = value()
+            except Exception:
+                value = False
+        return bool(value)
+
+    def _event_command_text(self, event: AstrMessageEvent, allow_bare: bool = False) -> str:
+        return self._command_text_without_prefix(
+            self._get_event_text(event),
+            allow_bare=allow_bare or self._event_is_at_or_wake_command(event),
+        )
+
+    def _stop_event_if_possible(self, event: AstrMessageEvent) -> None:
+        stop_event = getattr(event, "stop_event", None)
+        if callable(stop_event):
+            try:
+                stop_event()
+            except Exception:
+                pass
+
+    def _command_prefix_regex(self) -> str:
+        prefixes = [prefix for prefix in self._command_prefixes() if prefix]
+        if not prefixes:
+            return ""
+        escaped = [re.escape(prefix) for prefix in sorted(prefixes, key=len, reverse=True)]
+        return "(?:" + "|".join(escaped) + ")"
+
+    def _display_command_prefix(self) -> str:
+        for prefix in self._command_prefixes():
+            if prefix:
+                return prefix
+        return ""
+
     def _message_component_has_command(self, obj: Any, command: str) -> bool:
         if not command or type(obj).__name__ != "Plain":
             return False
         text = str(getattr(obj, "text", "") or "")
-        pattern = rf"(^|\s)[/!！.]?{re.escape(command)}(?:\s|$)"
+        prefix_pattern = self._command_prefix_regex()
+        prefix_part = rf"(?:{prefix_pattern})?" if prefix_pattern else ""
+        pattern = rf"(^|\s){prefix_part}{re.escape(command)}(?:\s|$)"
         return bool(re.search(pattern, text))
 
     def _get_event_images(
@@ -1540,12 +1639,26 @@ class OmniDrawPlugin(Star):
         return str(getattr(event, "message_obj", "") or "").strip()
 
     def _extract_command_message(self, event: AstrMessageEvent, command: str, fallback: str = "") -> str:
+        return self._extract_command_message_any(event, (command,), fallback)
+
+    def _extract_command_message_any(
+        self,
+        event: AstrMessageEvent,
+        commands: Iterable[str],
+        fallback: str = "",
+    ) -> str:
         text = self._get_event_text(event)
         if not text:
             return fallback.strip()
-        pattern = rf"^\s*[/!！.]?{re.escape(command)}(?:\s+(.*))?$"
-        match = re.match(pattern, text, flags=re.S)
-        return (match.group(1) or "").strip() if match else fallback.strip()
+        command_text = self._command_text_without_prefix(text, allow_bare=True)
+        for command in sorted((str(item or "").strip() for item in commands), key=len, reverse=True):
+            if not command:
+                continue
+            pattern = rf"^{re.escape(command)}(?:\s+(.*))?$"
+            match = re.match(pattern, command_text, flags=re.S)
+            if match:
+                return (match.group(1) or "").strip()
+        return fallback.strip()
 
     def _create_image_component(self, image_url: str) -> Image:
         if image_url.startswith("data:image"):
@@ -1737,15 +1850,64 @@ class OmniDrawPlugin(Star):
     def _build_fast_preset_list_message(self) -> str:
         return self._build_preset_list_message()
 
-    def _extract_compact_command_payload(self, text: str, command: str) -> str:
-        pattern = rf"^\s*[/!！.]{re.escape(command)}(?P<payload>\S.*)$"
-        match = re.match(pattern, str(text or ""), flags=re.S)
-        return (match.group("payload") or "").strip() if match else ""
+    def _extract_compact_command_payload(self, text: str, command: str, allow_bare: bool = False) -> str:
+        return self._extract_compact_command_payload_any(text, (command,), allow_bare=allow_bare)
+
+    def _extract_compact_command_payload_any(
+        self,
+        text: str,
+        commands: Iterable[str],
+        allow_bare: bool = False,
+    ) -> str:
+        command_text = self._command_text_without_prefix(text, allow_bare=allow_bare)
+        for command in sorted((str(item or "").strip() for item in commands), key=len, reverse=True):
+            if not command or not command_text.startswith(command):
+                continue
+            payload = command_text[len(command):]
+            if not payload or payload[0].isspace():
+                continue
+            return payload.strip()
+        return ""
+
+    def _parse_preset_trigger(self, text: str, allow_bare: bool = False) -> Tuple[str, str]:
+        command_text = self._command_text_without_prefix(text, allow_bare=allow_bare)
+        if not command_text:
+            return "", ""
+
+        command_text_lower = command_text.lower()
+        for preset_name, _ in sorted(self._preset_items(), key=lambda item: len(item[0]), reverse=True):
+            preset_name_lower = preset_name.lower()
+            if command_text_lower == preset_name_lower:
+                return preset_name, ""
+            if (
+                command_text_lower.startswith(preset_name_lower)
+                and len(command_text) > len(preset_name)
+                and command_text[len(preset_name)].isspace()
+            ):
+                return preset_name, command_text[len(preset_name):].strip()
+        return "", ""
+
+    def _match_preset_trigger(self, text: str, allow_bare: bool = False) -> str:
+        preset_name, _ = self._parse_preset_trigger(text, allow_bare=allow_bare)
+        return preset_name
+
+    def _build_preset_generation_prompt(self, preset_prompt: str, extra_rules: str = "") -> str:
+        preset_prompt = str(preset_prompt or "").strip()
+        extra_rules = str(extra_rules or "").strip()
+        if not extra_rules:
+            return preset_prompt
+        if not preset_prompt:
+            return extra_rules
+        return f"{preset_prompt}\nAdditional requirements: {extra_rules}"
 
     def _parse_preset_add_payload(self, payload: str) -> tuple:
         payload = str(payload or "").strip()
         if not payload:
             return "", ""
+        for separator in (":", "："):
+            if separator in payload:
+                preset_name, preset_prompt = payload.split(separator, 1)
+                return preset_name.strip(), preset_prompt.strip()
         parts = payload.split(maxsplit=1)
         if len(parts) < 2:
             return parts[0].strip(), ""
@@ -1755,9 +1917,9 @@ class OmniDrawPlugin(Star):
         preset_name = str(preset_name or "").strip()
         if not preset_name:
             return "缺少预设名。"
-        if any(char in preset_name for char in (":", "\r", "\n", "\t")):
+        if any(char in preset_name for char in (":", "：", "\r", "\n", "\t")):
             return "预设名不能包含冒号、换行或制表符。"
-        if preset_name.startswith(("/", "!", "！", ".")):
+        if any(prefix and preset_name.startswith(prefix) for prefix in self._command_prefixes()):
             return "预设名不需要包含指令前缀。"
         return ""
 
@@ -2157,27 +2319,32 @@ class OmniDrawPlugin(Star):
     @filter.command("万象帮助")
     @handle_errors
     async def cmd_help(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        prefix = self._display_command_prefix()
+
+        def cmd(name: str) -> str:
+            return f"{prefix}{name}" if prefix else name
+
         msg = (
             f"📖 万象画卷 v{PLUGIN_VERSION}\n"
-            "/画 [提示词] [--参数 值]\n"
-            "/自拍 [动作] [--参数 值]\n"
-            "/视频 [提示词] [--参数 值]\n"
-            "/人设\n"
-            "/切换人设 [序号/ID/名称]\n"
-            "/切换链路 [画图/自拍/视频/副脑] [节点ID]\n"
-            "/切换模型 [画图/自拍/视频] [序号或名称]\n"
-            "/签到\n"
-            "/清理缓存\n"
-            "/查看预设 [预设名]\n"
-            "/添加预设 [预设名] [提示词]\n"
-            "/删除预设 [预设名]\n"
-            "/万象帮助\n\n"
+            f"{cmd('画')} [提示词] [--参数 值]\n"
+            f"{cmd('自拍')} [动作] [--参数 值]\n"
+            f"{cmd('视频')} [提示词] [--参数 值]\n"
+            f"{cmd('人设')}\n"
+            f"{cmd('切换人设')} [序号/ID/名称]\n"
+            f"{cmd('切换链路')} [画图/自拍/视频/副脑] [节点ID]\n"
+            f"{cmd('切换模型')} [画图/自拍/视频] [序号或名称]\n"
+            f"{cmd('签到')}\n"
+            f"{cmd('清理缓存')}\n"
+            f"{cmd('查看预设')} [预设名]\n"
+            f"{cmd('添加预设')} [预设名] [提示词]\n"
+            f"{cmd('删除预设')} [预设名]\n"
+            f"{cmd('万象帮助')}\n\n"
         )
         if self.plugin_config.presets:
-            msg += "✨ 预设:\n" + "\n".join([f"/{preset}" for preset in self.plugin_config.presets.keys()])
+            msg += "✨ 预设:\n" + "\n".join([cmd(str(preset)) for preset in self.plugin_config.presets.keys()])
         yield event.plain_result(msg)
 
-    @filter.command("查看预设")
+    @filter.command("查看预设", prefix_optional=True)
     @handle_errors
     async def cmd_view_presets(
         self,
@@ -2189,16 +2356,16 @@ class OmniDrawPlugin(Star):
         p5: str = "",
     ) -> AsyncGenerator[Any, None]:
         fallback = " ".join(str(item) for item in [p1, p2, p3, p4, p5] if item).strip()
-        selector = self._extract_command_message(event, "查看预设", fallback)
+        selector = self._extract_command_message_any(event, PRESET_VIEW_COMMANDS + PRESET_LIST_COMMANDS, fallback)
         yield event.plain_result(self._build_preset_view_message(selector))
 
-    @filter.command("极速宏")
+    @filter.command("极速宏", prefix_optional=True)
     @handle_errors
     async def cmd_fast_preset_list(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
         yield event.plain_result(self._build_fast_preset_list_message())
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("添加预设")
+    @filter.command("添加预设", prefix_optional=True)
     @handle_errors
     async def cmd_add_preset(
         self,
@@ -2215,7 +2382,7 @@ class OmniDrawPlugin(Star):
         p10: str = "",
     ) -> AsyncGenerator[Any, None]:
         fallback = " ".join(str(item) for item in [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10] if item).strip()
-        payload = self._extract_command_message(event, "添加预设", fallback)
+        payload = self._extract_command_message_any(event, PRESET_ADD_COMMANDS, fallback)
         preset_name, preset_prompt = self._parse_preset_add_payload(payload)
         name_error = self._validate_preset_name(preset_name)
         if name_error:
@@ -2230,7 +2397,7 @@ class OmniDrawPlugin(Star):
         yield event.plain_result(f"{MessageEmoji.SUCCESS} {action}预设「{preset_name}」。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("删除预设")
+    @filter.command("删除预设", prefix_optional=True)
     @handle_errors
     async def cmd_delete_preset(
         self,
@@ -2242,7 +2409,7 @@ class OmniDrawPlugin(Star):
         p5: str = "",
     ) -> AsyncGenerator[Any, None]:
         fallback = " ".join(str(item) for item in [p1, p2, p3, p4, p5] if item).strip()
-        selector = self._extract_command_message(event, "删除预设", fallback)
+        selector = self._extract_command_message_any(event, PRESET_DELETE_COMMANDS, fallback)
         if not selector:
             yield event.plain_result(f"{MessageEmoji.WARNING} 缺少预设名。\n用法: /删除预设 [预设名]")
             return
@@ -2464,23 +2631,27 @@ class OmniDrawPlugin(Star):
         self._safe_update_context_config()
         yield event.plain_result(f"{MessageEmoji.SUCCESS} 已将 {target} 节点 ({provider.id}) 默认模型切换为: {selected_model}")
 
-    @filter.event_message_type(EventMessageType.ALL)
+    @filter.event_message_type(EventMessageType.ALL, priority=5)
     async def on_message_preset(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
         text = self._get_event_text(event)
+        allow_bare_command = self._event_is_at_or_wake_command(event)
 
-        compact_view_selector = self._extract_compact_command_payload(text, "查看预设")
+        compact_view_selector = self._extract_compact_command_payload_any(
+            text,
+            PRESET_VIEW_COMMANDS,
+            allow_bare=allow_bare_command,
+        )
         if compact_view_selector:
+            self._stop_event_if_possible(event)
             yield event.plain_result(self._build_preset_view_message(compact_view_selector))
             return
 
         if not self.plugin_config.presets:
             return
-        match = re.match(r"^\s*[/!！.]([^\s]+)", text)
-        if not match:
+        cmd_name, extra_rules = self._parse_preset_trigger(text, allow_bare=allow_bare_command)
+        if not cmd_name:
             return
-        cmd_name = match.group(1).strip()
-        if cmd_name not in self.plugin_config.presets:
-            return
+        self._stop_event_if_possible(event)
         permission_error = self._permission_denied_message(event)
         if permission_error:
             yield event.plain_result(permission_error)
@@ -2496,22 +2667,32 @@ class OmniDrawPlugin(Star):
                 raw_refs = self._get_event_images(event, include_at_avatars=True, at_after_command=cmd_name)
                 preset_prompt = self.plugin_config.presets[cmd_name]
                 safe_refs = await self._process_and_save_images(raw_refs, session=session)
+                base_prompt, kwargs = self.cmd_parser.parse(preset_prompt)
+                extra_prompt, extra_kwargs = self.cmd_parser.parse(extra_rules)
+                kwargs.update(extra_kwargs)
+                prompt = self._build_preset_generation_prompt(base_prompt, extra_prompt)
+                param_count = len(kwargs)
+                if safe_refs:
+                    kwargs["user_refs"] = safe_refs
 
                 msg = self._format_pending_message(
                     self.plugin_config.draw_pending_message,
                     DEFAULT_DRAW_PENDING_MESSAGE,
                     command=cmd_name,
-                    prompt=preset_prompt,
+                    prompt=prompt,
                     ref_count=len(safe_refs),
-                    param_count=0,
+                    param_count=param_count,
                     persona_name=self.plugin_config.persona_name,
                 )
                 if self.plugin_config.verbose_report:
-                    msg += f"\n📝 宏对应提示词: {preset_prompt}\n🖼️ 实际参考图：{len(safe_refs)} 张"
+                    msg += f"\n📝 宏对应提示词: {prompt}\n⚙️ 附加参数：{param_count} 个"
+                    if extra_prompt:
+                        msg += f"\n➕ 追加规则：{extra_prompt}"
+                    msg += f"\n🖼️ 实际参考图：{len(safe_refs)} 张"
                 yield event.plain_result(msg)
 
                 chain_manager = ChainManager(self.plugin_config, session)
-                result = await chain_manager.run_chain_with_metadata("text2img", preset_prompt, user_refs=safe_refs)
+                result = await chain_manager.run_chain_with_metadata("text2img", prompt, **kwargs)
             self._record_generated_images(event, 1)
             yield event.chain_result(self._build_image_success_components(result, time.perf_counter() - started_at))
         except Exception as exc:
