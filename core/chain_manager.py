@@ -32,6 +32,18 @@ class ChainManager:
         override = kwargs.get("model") if isinstance(kwargs, dict) else None
         return str(override or default_model or "").strip()
 
+    def _apply_provider_defaults(self, provider_config: Any, kwargs: Any) -> dict:
+        request_kwargs = dict(kwargs or {})
+        if str(request_kwargs.get("size", "") or "").strip():
+            return request_kwargs
+        if str(request_kwargs.get("resolution", "") or "").strip():
+            return request_kwargs
+
+        default_size = str(getattr(provider_config, "default_size", "") or "").strip()
+        if default_size:
+            request_kwargs["size"] = default_size
+        return request_kwargs
+
     async def run_chain_with_metadata(self, chain_name: str, prompt: str, **kwargs: Any) -> ChainRunResult:
         raw_chain = self.config.chains.get(chain_name)
         chain = []
@@ -69,12 +81,13 @@ class ChainManager:
             logger.info(f"🚀 [Chain] 正在将任务交由节点 [{provider_id}] 处理...")
             try:
                 provider = create_provider(provider_config, self.session)
-                result = await provider.generate_image(prompt, **kwargs)
+                request_kwargs = self._apply_provider_defaults(provider_config, kwargs)
+                result = await provider.generate_image(prompt, **request_kwargs)
                 logger.info(f"✅ [Chain] 节点 [{provider_id}] 创作成功！")
                 return ChainRunResult(
                     image_url=result,
                     provider_id=provider_id,
-                    model=self._effective_request_model(provider_config.model, kwargs),
+                    model=self._effective_request_model(provider_config.model, request_kwargs),
                     elapsed_seconds=time.perf_counter() - start_time,
                 )
 

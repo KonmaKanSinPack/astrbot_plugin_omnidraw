@@ -209,6 +209,12 @@
             "type": "float",
             "hint": "图片建议 120-300；较慢接口可调高。",
             "default": 60
+          },
+          "default_size": {
+            "description": "默认尺寸",
+            "type": "string",
+            "hint": "留空使用调用参数或模型默认值。填写后，该节点每次调用默认使用此尺寸，例如 1024x1024；调用时传入 size 或 resolution 会优先生效。",
+            "default": ""
           }
         }
       }
@@ -269,6 +275,12 @@
             "type": "float",
             "hint": "视频生成通常较慢，建议 300 或更高。",
             "default": 300
+          },
+          "default_size": {
+            "description": "默认尺寸",
+            "type": "string",
+            "hint": "留空使用调用参数或模型默认值。填写后，该节点每次调用默认使用此尺寸，例如 1280x720；调用时传入 size 或 resolution 会优先生效。",
+            "default": ""
           }
         }
       }

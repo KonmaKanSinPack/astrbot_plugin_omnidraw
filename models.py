@@ -19,7 +19,7 @@ from .utils import save_image_bytes, split_data_url
 
 PLUGIN_NAME = "astrbot_plugin_omnidraw"
 PLUGIN_AUTHOR = "雪碧bir"
-PLUGIN_VERSION = "3.3.19"
+PLUGIN_VERSION = "3.3.20"
 DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS = 24
 DEFAULT_MAX_CACHE_SIZE_MB = 512
 
@@ -32,6 +32,7 @@ class ProviderConfig:
     api_keys: List[str]
     model: str
     timeout: float
+    default_size: str = ""
     available_models: List[str] = field(default_factory=list)
 
     @property
@@ -114,8 +115,11 @@ class PluginConfig:
             if isinstance(preset, dict):
                 name = str(preset.get("name", "")).strip()
                 prompt = str(preset.get("prompt", "")).strip()
-            elif isinstance(preset, str) and ":" in preset:
-                name, prompt = preset.split(":", 1)
+            elif isinstance(preset, str):
+                separator = ":" if ":" in preset else ("：" if "：" in preset else "")
+                if not separator:
+                    continue
+                name, prompt = preset.split(separator, 1)
                 name = name.strip()
                 prompt = prompt.strip()
             else:
@@ -150,7 +154,6 @@ class PluginConfig:
             "video": _parse_chain(router_conf.get("chain_video", "video_node_1")),
             "optimizer": _parse_chain(opt_conf.get("chain_optimizer", "node_1")),
         }
-
         optimizer_model = str(opt_conf.get("optimizer_model", "")).strip()
         if not optimizer_model and providers:
             optimizer_model = providers[0].model
@@ -383,6 +386,7 @@ def _build_provider_config(raw_provider: Any, is_video: bool) -> ProviderConfig:
         api_keys=_split_csv_or_lines(raw_provider.get("api_keys", raw_provider.get("API密钥", ""))),
         model=model,
         timeout=_to_float(raw_provider.get("timeout", raw_provider.get("超时时间(秒)", default_timeout)), default_timeout, 1.0),
+        default_size=_normalize_optional_text(raw_provider.get("default_size", raw_provider.get("default_resolution", ""))),
         available_models=available_models,
     )
 
@@ -421,6 +425,10 @@ def _merge_unique_values(*values: Any) -> List[str]:
 def _normalize_reply_text(value: Any, default: str) -> str:
     text = str(value or "").strip()
     return text or default
+
+
+def _normalize_optional_text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def _to_bool(value: Any) -> bool:
