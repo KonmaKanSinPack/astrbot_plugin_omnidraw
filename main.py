@@ -1185,6 +1185,14 @@ class OmniDrawPlugin(Star):
             except Exception:
                 pass
 
+    async def _send_plain_message(self, event: AstrMessageEvent, message: str) -> Optional[Any]:
+        result = event.plain_result(message)
+        send = getattr(event, "send", None)
+        if callable(send):
+            await send(result)
+            return None
+        return result
+
     def _command_prefix_regex(self) -> str:
         prefixes = [prefix for prefix in self._command_prefixes() if prefix]
         if not prefixes:
@@ -2689,7 +2697,9 @@ class OmniDrawPlugin(Star):
                     if extra_prompt:
                         msg += f"\n➕ 追加规则：{extra_prompt}"
                     msg += f"\n🖼️ 实际参考图：{len(safe_refs)} 张"
-                yield event.plain_result(msg)
+                pending_result = await self._send_plain_message(event, msg)
+                if pending_result is not None:
+                    yield pending_result
 
                 chain_manager = ChainManager(self.plugin_config, session)
                 result = await chain_manager.run_chain_with_metadata("text2img", prompt, **kwargs)
@@ -2753,7 +2763,9 @@ class OmniDrawPlugin(Star):
             )
             if self.plugin_config.verbose_report:
                 msg += f"\n📝 最终提示词: {prompt}\n⚙️ 附加参数：{param_count} 个\n🖼️ 实际参考图：{len(safe_refs)} 张"
-            yield event.plain_result(msg)
+            pending_result = await self._send_plain_message(event, msg)
+            if pending_result is not None:
+                yield pending_result
 
             chain_manager = ChainManager(self.plugin_config, session)
             result = await chain_manager.run_chain_with_metadata("text2img", prompt, **kwargs)
@@ -2816,7 +2828,9 @@ class OmniDrawPlugin(Star):
             )
             if self.plugin_config.verbose_report:
                 msg += f"\n📝 构建提示词: {final_prompt}\n⚙️ 附加参数：{len(kwargs)} 个\n🖼️ 实际参考图：{len(safe_refs)} 张"
-            yield event.plain_result(msg)
+            pending_result = await self._send_plain_message(event, msg)
+            if pending_result is not None:
+                yield pending_result
 
             chain_to_use = "selfie" if self.plugin_config.chains.get("selfie") else "text2img"
             chain_manager = ChainManager(self.plugin_config, session)
@@ -2867,7 +2881,9 @@ class OmniDrawPlugin(Star):
         msg = f"{MessageEmoji.INFO} 视频任务已提交后台渲染..."
         if self.plugin_config.verbose_report:
             msg += f"\n📝 渲染提示词: {prompt}\n⚙️ 附加参数：{len(kwargs)} 个\n🖼️ 参考图/首尾帧：{len(safe_refs)} 张"
-        yield event.plain_result(msg)
+        pending_result = await self._send_plain_message(event, msg)
+        if pending_result is not None:
+            yield pending_result
 
         self._create_background_task(self.video_manager.background_task_runner(event, prompt, safe_refs, kwargs))
 
