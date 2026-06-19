@@ -1105,7 +1105,11 @@ class PresetEventHandlerTest(unittest.IsolatedAsyncioTestCase):
             def chain_result(self, chain):
                 return ("chain", chain)
 
+            async def send(self, result):
+                self.sent.append(result)
+
         event = FakeEvent()
+        event.sent = []
         main_module.aiohttp.ClientSession = FakeClientSession
         main_module.ChainManager = FakeChainManager
         try:
@@ -1123,9 +1127,154 @@ class PresetEventHandlerTest(unittest.IsolatedAsyncioTestCase):
                 {"size": "1024x1024", "model": "test-model"},
             )
         ])
-        self.assertEqual(results[0][0], "plain")
-        self.assertIn("胶片少女", results[0][1])
-        self.assertEqual(results[1], ("chain", [{"result": "https://cdn.example.com/preset.png"}]))
+        self.assertEqual(event.sent[0][0], "plain")
+        self.assertIn("胶片少女", event.sent[0][1])
+        self.assertEqual(results, [("chain", [{"result": "https://cdn.example.com/preset.png"}])])
+
+
+class CommandPendingSendTest(unittest.IsolatedAsyncioTestCase):
+    def _plugin(self):
+        plugin = object.__new__(OmniDrawPlugin)
+        plugin.plugin_config = types.SimpleNamespace(
+            draw_pending_message="正在生成 {command}: {prompt} 参数{param_count}",
+            selfie_pending_message="正在自拍 {command}: {prompt} 参数{param_count}",
+            persona_name="默认助手",
+            verbose_report=False,
+            persona_ref_images=[],
+            chains={"selfie": ["selfie_node"]},
+        )
+        plugin.cmd_parser = main_module.CommandParser()
+        plugin.prompt_optimizer = types.SimpleNamespace(
+            optimize=lambda prompt, count, session=None: self._optimize(prompt, count)
+        )
+        plugin.persona_manager = types.SimpleNamespace(
+            build_persona_prompt=lambda action: (f"persona base, {action}", {"persona_ref": "persona-default.png"})
+        )
+        plugin.video_manager = types.SimpleNamespace(background_task_runner=self._video_runner)
+        plugin._permission_denied_message = lambda event: ""
+        plugin._image_quota_error_message = lambda event, count=1: ""
+        plugin._extract_command_message = lambda event, command, fallback: fallback
+        plugin._get_event_images = lambda *args, **kwargs: []
+        plugin._process_and_save_images = self._process_refs
+        plugin._recorded_count = 0
+        plugin._record_generated_images = lambda event, count=1: setattr(plugin, "_recorded_count", count)
+        plugin._build_image_success_components = lambda result, elapsed: [{"result": result.image_url}]
+        plugin._scheduled_tasks = []
+
+        def create_background_task(coro):
+            plugin._scheduled_tasks.append(coro)
+            close = getattr(coro, "close", None)
+            if callable(close):
+                close()
+
+        plugin._create_background_task = create_background_task
+        return plugin
+
+    async def _process_refs(self, refs, session=None):
+        return []
+
+    async def _optimize(self, prompt, count):
+        return [f"optimized {prompt}"]
+
+    async def _video_runner(self, event, prompt, refs, kwargs):
+        return None
+
+    class FakeEvent:
+        def __init__(self):
+            self.message_obj = types.SimpleNamespace(message_str="", message=[], message_id="msg-1")
+            self.message_str = ""
+            self.sent = []
+
+        def plain_result(self, text):
+            return ("plain", text)
+
+        def chain_result(self, chain):
+            return ("chain", chain)
+
+        async def send(self, result):
+            self.sent.append(result)
+
+    async def test_draw_sends_pending_message_without_yielding_before_chain(self):
+        plugin = self._plugin()
+        calls = []
+        original_client_session = main_module.aiohttp.ClientSession
+        original_chain_manager = main_module.ChainManager
+
+        class FakeChainManager:
+            def __init__(self, config, session):
+                pass
+
+            async def run_chain_with_metadata(self, chain_name, prompt, **kwargs):
+                calls.append((chain_name, prompt, kwargs))
+                return ChainRunResult(
+                    image_url="https://cdn.example.com/draw.png",
+                    provider_id="node_1",
+                    model=kwargs.get("model", "model_a"),
+                    elapsed_seconds=1.0,
+                )
+
+        event = self.FakeEvent()
+        main_module.aiohttp.ClientSession = FakeClientSession
+        main_module.ChainManager = FakeChainManager
+        try:
+            results = [item async for item in plugin.cmd_draw(event, "海边日落", "--model", "test-model")]
+        finally:
+            main_module.aiohttp.ClientSession = original_client_session
+            main_module.ChainManager = original_chain_manager
+
+        self.assertEqual(event.sent[0][0], "plain")
+        self.assertIn("正在生成 画", event.sent[0][1])
+        self.assertEqual(calls, [("text2img", "海边日落", {"model": "test-model"})])
+        self.assertEqual(results, [("chain", [{"result": "https://cdn.example.com/draw.png"}])])
+        self.assertEqual(plugin._recorded_count, 1)
+
+    async def test_selfie_sends_pending_message_without_yielding_before_chain(self):
+        plugin = self._plugin()
+        calls = []
+        original_client_session = main_module.aiohttp.ClientSession
+        original_chain_manager = main_module.ChainManager
+
+        class FakeChainManager:
+            def __init__(self, config, session):
+                pass
+
+            async def run_chain_with_metadata(self, chain_name, prompt, **kwargs):
+                calls.append((chain_name, prompt, kwargs))
+                return ChainRunResult(
+                    image_url="https://cdn.example.com/selfie.png",
+                    provider_id="selfie_node",
+                    model=kwargs.get("model", "model_a"),
+                    elapsed_seconds=1.0,
+                )
+
+        event = self.FakeEvent()
+        main_module.aiohttp.ClientSession = FakeClientSession
+        main_module.ChainManager = FakeChainManager
+        try:
+            results = [item async for item in plugin.cmd_selfie(event, "挥手", "--model", "test-model")]
+        finally:
+            main_module.aiohttp.ClientSession = original_client_session
+            main_module.ChainManager = original_chain_manager
+
+        self.assertEqual(event.sent[0][0], "plain")
+        self.assertIn("正在自拍 自拍", event.sent[0][1])
+        self.assertEqual(
+            calls,
+            [("selfie", "persona base, optimized 挥手", {"persona_ref": "persona-default.png", "model": "test-model"})],
+        )
+        self.assertEqual(results, [("chain", [{"result": "https://cdn.example.com/selfie.png"}])])
+        self.assertEqual(plugin._recorded_count, 1)
+
+    async def test_video_sends_pending_message_then_schedules_background_task(self):
+        plugin = self._plugin()
+        event = self.FakeEvent()
+
+        results = [item async for item in plugin.cmd_video(event, "城市夜景", "--duration", "5")]
+
+        self.assertEqual(event.sent[0][0], "plain")
+        self.assertIn("视频任务已提交后台渲染", event.sent[0][1])
+        self.assertEqual(results, [])
+        self.assertEqual(len(plugin._scheduled_tasks), 1)
 
 
 class ChainManagerMetadataTest(unittest.IsolatedAsyncioTestCase):
