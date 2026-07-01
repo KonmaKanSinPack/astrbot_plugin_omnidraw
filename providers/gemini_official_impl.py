@@ -1,9 +1,9 @@
 """Google Gemini native image provider."""
 
+import asyncio
 import base64
 import json
 import math
-import os
 import re
 from typing import Any, Dict, List
 from urllib.parse import quote
@@ -47,29 +47,15 @@ class GeminiOfficialProvider(BaseProvider):
     """Call Google's native Gemini generateContent endpoint."""
 
     async def _get_image_bytes(self, image_path_or_url: str) -> bytes:
-        if image_path_or_url.startswith("data:image"):
-            try:
-                return base64.b64decode(image_path_or_url.split(",", 1)[1], validate=False)
-            except Exception as exc:
-                raise RuntimeError(f"Base64 参考图解析失败: {exc}")
-        if image_path_or_url.startswith("http"):
-            logger.info("📥 [Gemini官方通道] 正在下载网络参考图并转码...")
-            headers = {"User-Agent": "Mozilla/5.0"}
-            async with self.session.get(image_path_or_url, headers=headers) as response:
-                if response.status != 200:
-                    raise RuntimeError(f"参考图下载失败，服务器返回状态码: {response.status}")
-                return await response.read()
-        if not os.path.exists(image_path_or_url):
-            raise RuntimeError(f"本地参考图不存在: {image_path_or_url}")
-        with open(image_path_or_url, "rb") as file:
-            return file.read()
+        return await self.fetch_reference_bytes(image_path_or_url)
 
     async def _inline_image_part(self, image_path_or_url: str) -> Dict[str, Any]:
         image_bytes = await self._get_image_bytes(image_path_or_url)
+        encoded = await asyncio.to_thread(lambda: base64.b64encode(image_bytes).decode("ascii"))
         return {
             "inlineData": {
                 "mimeType": guess_image_content_type(image_path_or_url),
-                "data": base64.b64encode(image_bytes).decode("ascii"),
+                "data": encoded,
             }
         }
 

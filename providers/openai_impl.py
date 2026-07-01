@@ -1,5 +1,4 @@
 import aiohttp
-import base64
 from typing import Any
 
 from astrbot.api import logger
@@ -18,33 +17,14 @@ from .base import (
 class OpenAIProvider(BaseProvider):
 
     async def _get_image_bytes(self, image_path_or_url: str) -> bytes:
-        """拦截网络图片下载，对抗防盗链"""
-        if image_path_or_url.startswith("data:image"):
-            try:
-                return base64.b64decode(image_path_or_url.split(",", 1)[1], validate=False)
-            except Exception as exc:
-                raise RuntimeError(f"Base64 参考图解析失败: {exc}")
-        if image_path_or_url.startswith("http"):
-            logger.info("📥 [标准通道] 正在本地内存中拦截并下载网络参考图...")
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            }
-            async with self.session.get(image_path_or_url, headers=headers) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-                else:
-                    raise RuntimeError(f"拦截下载网络图片失败，服务器返回状态码: {resp.status}")
-        else:
-            with open(image_path_or_url, "rb") as f:
-                return f.read()
+        """拦截网络图片下载（对抗防盗链），本地读取不阻塞事件循环。"""
+        return await self.fetch_reference_bytes(image_path_or_url)
 
     def _content_type(self, image_path_or_url: str) -> str:
         return guess_image_content_type(image_path_or_url)
 
     async def _encode_image_to_data_url(self, image_path_or_url: str) -> str:
-        image_bytes = await self._get_image_bytes(image_path_or_url)
-        mime_type = self._content_type(image_path_or_url)
-        return f"data:{mime_type};base64," + base64.b64encode(image_bytes).decode("utf-8")
+        return await self.fetch_reference_data_url(image_path_or_url)
 
     async def generate_image(self, prompt: str, **kwargs: Any) -> str:
         current_key = self.get_current_key()

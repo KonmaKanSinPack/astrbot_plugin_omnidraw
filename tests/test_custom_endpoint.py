@@ -458,6 +458,27 @@ class RuntimeConfigKeyTest(unittest.TestCase):
         self.assertIn("GEMINI_OFFICIAL_BASE_URL", app_js)
         self.assertNotIn("return applyImageProviderDefaults({", app_js)
 
+    def test_optimizer_style_options_match_style_presets(self):
+        """schema 的副脑风格选项必须与代码内置风格 (STYLE_PRESETS) 及页面下拉保持一致，避免选了风格却静默回退。"""
+        optimizer_source = (PLUGIN_DIR / "core" / "prompt_optimizer.py").read_text(encoding="utf-8")
+        preset_keys = None
+        for node in ast.walk(ast.parse(optimizer_source)):
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "STYLE_PRESETS"
+                for target in node.targets
+            ):
+                preset_keys = list(ast.literal_eval(node.value).keys())
+                break
+        self.assertIsNotNone(preset_keys, "未能在 prompt_optimizer.py 中找到 STYLE_PRESETS")
+
+        schema = json.loads((PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8"))
+        schema_options = schema["optimizer_config"]["items"]["optimizer_style"]["options"]
+        self.assertEqual(schema_options, preset_keys + ["自定义模式"])
+
+        index_html = (PLUGIN_DIR / "pages" / "插件配置" / "index.html").read_text(encoding="utf-8")
+        for option in schema_options:
+            self.assertIn(f'value="{option}"', index_html)
+
     def test_tests_directory_is_not_gitignored(self):
         gitignore = (PLUGIN_DIR / ".gitignore").read_text(encoding="utf-8")
 

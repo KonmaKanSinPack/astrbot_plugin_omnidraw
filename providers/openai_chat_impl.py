@@ -3,7 +3,6 @@ AstrBot 万象画卷插件 v3.1 - OpenAI Chat 兼容实现
 功能：支持高阶多模态参数动态透传 (兼容 Midjourney/Gemini 等走 Chat 通道的代理节点)
 """
 import aiohttp
-import base64
 from typing import Any
 from astrbot.api import logger
 
@@ -12,7 +11,6 @@ from .base import (
     build_chat_completions_endpoint,
     extract_error_message,
     extract_image_url_from_response,
-    guess_image_content_type,
     summarize_payload_json_for_log,
     summarize_response_text_for_log,
 )
@@ -20,25 +18,9 @@ from .base import (
 class OpenAIChatProvider(BaseProvider):
 
     async def _encode_image_to_base64(self, image_path_or_url: str) -> str:
-        """拦截网络图片下载，对抗防盗链，转化为标准的 Base64 协议"""
+        """拦截网络图片下载（对抗防盗链）并转成 data URL；失败时返回空串，跳过该参考图。"""
         try:
-            if image_path_or_url.startswith("data:image"):
-                return image_path_or_url
-            if image_path_or_url.startswith("http"):
-                logger.info("📥 正在本地内存中拦截并下载网络参考图...")
-                headers = {"User-Agent": "Mozilla/5.0"}
-                async with self.session.get(image_path_or_url, headers=headers) as resp:
-                    if resp.status == 200:
-                        image_bytes = await resp.read()
-                        mime_type = guess_image_content_type(image_path_or_url, resp.headers.get("Content-Type", "image/png"))
-                        return f"data:{mime_type};base64," + base64.b64encode(image_bytes).decode('utf-8')
-                    else:
-                        logger.error(f"下载网络图片失败，状态码: {resp.status}")
-                        return ""
-            else:
-                with open(image_path_or_url, "rb") as f:
-                    mime_type = guess_image_content_type(image_path_or_url)
-                    return f"data:{mime_type};base64," + base64.b64encode(f.read()).decode('utf-8')
+            return await self.fetch_reference_data_url(image_path_or_url)
         except Exception as e:
             logger.error("读取或下载参考图失败: " + str(e))
             return ""

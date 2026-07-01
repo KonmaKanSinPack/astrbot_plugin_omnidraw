@@ -1174,6 +1174,12 @@ function setupEventDelegation() {
     const fileInput = byId("hidden-file-input");
     const pressableSelector = ".nav-item, .btn-primary, .btn-secondary, .btn-glass-secondary, .btn-ghost, .upload-trigger, .selector-chip, .api-chip, .persona-profile-chip";
 
+    window.addEventListener("beforeunload", (event) => {
+        if (!dirtyState) return;
+        event.preventDefault();
+        event.returnValue = "";
+    });
+
     document.body.addEventListener("pointerdown", (e) => {
         const target = e.target.closest(pressableSelector);
         if (!target || target.disabled) return;
