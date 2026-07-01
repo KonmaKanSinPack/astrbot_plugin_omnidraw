@@ -12,7 +12,13 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.message_components import Plain, Video
 
 from ..models import PluginConfig, ProviderConfig
-from ..providers.base import build_chat_completions_endpoint, build_video_generations_endpoint, guess_image_content_type, next_api_key
+from ..providers.base import (
+    _read_file_bytes,
+    build_chat_completions_endpoint,
+    build_video_generations_endpoint,
+    guess_image_content_type,
+    next_api_key,
+)
 
 
 class VideoTaskError(Exception):
@@ -100,13 +106,13 @@ class VideoManager:
                     image_bytes = await response.read()
                     content_type = guess_image_content_type(image_ref, response.headers.get("Content-Type", ""))
             elif os.path.exists(image_ref):
-                with open(image_ref, "rb") as file:
-                    image_bytes = file.read()
+                image_bytes = await asyncio.to_thread(_read_file_bytes, image_ref)
                 content_type = guess_image_content_type(image_ref)
             else:
                 logger.warning(f"视频参考图不存在: {image_ref}")
                 return ""
-            return f"data:{content_type};base64," + base64.b64encode(image_bytes).decode("utf-8")
+            encoded = await asyncio.to_thread(lambda: base64.b64encode(image_bytes).decode("utf-8"))
+            return f"data:{content_type};base64," + encoded
         except Exception as exc:
             logger.error(f"❌ 图片转 Base64 失败 ({image_ref}): {exc}")
             return ""

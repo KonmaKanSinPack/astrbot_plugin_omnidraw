@@ -1,5 +1,6 @@
 """图片 Provider 基类。"""
 import aiohttp
+import asyncio
 import base64
 import json
 import mimetypes
@@ -7,13 +8,30 @@ import os
 import re
 import threading
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterable, Optional, List
+from typing import Any, Dict, Iterable, List
 from urllib.parse import parse_qsl, urljoin, urlparse, urlunparse
-from astrbot.api import logger
 from ..models import ProviderConfig
 
 _KEY_ROTATION_LOCK = threading.Lock()
 _KEY_ROTATION_INDEX: Dict[str, int] = {}
+
+# 参考图下载默认超时（秒）与浏览器 UA（对抗防盗链）。
+REF_DOWNLOAD_TIMEOUT = 20.0
+REF_DOWNLOAD_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+}
+
+
+def _read_file_bytes(path: str) -> bytes:
+    with open(path, "rb") as image_file:
+        return image_file.read()
+
+
+def _encode_base64(data: bytes) -> str:
+    return base64.b64encode(data).decode("utf-8")
 
 
 def normalize_base_url(base_url: str) -> str:
@@ -492,20 +510,33 @@ class BaseProvider(ABC):
     def get_current_key(self) -> str:
         return next_api_key(self.config.id, self._api_keys)
 
-    def encode_local_image_to_base64(self, image_path: str) -> Optional[str]:
-        """将本地图片文件转为 API 兼容的 Base64 字符串"""
-        if not image_path or not os.path.exists(image_path):
-            return None
+    async def fetch_reference_bytes(self, source: str, *, timeout: float = REF_DOWNLOAD_TIMEOUT) -> bytes:
+        """从 data URL、网络 URL 或本地路径读取参考图字节，网络下载带超时，本地读取放到线程池避免阻塞事件循环。"""
+        source = str(source or "")
+        if source.startswith("data:image"):
+            try:
+                return base64.b64decode(source.split(",", 1)[1], validate=False)
+            except Exception as exc:
+                raise RuntimeError(f"Base64 参考图解析失败: {exc}")
+        if source.startswith("http"):
+            timeout_obj = aiohttp.ClientTimeout(total=timeout)
+            async with self.session.get(source, headers=REF_DOWNLOAD_HEADERS, timeout=timeout_obj) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"参考图下载失败，服务器返回状态码: {response.status}")
+                return await response.read()
+        if not os.path.exists(source):
+            raise RuntimeError(f"本地参考图不存在: {source}")
+        return await asyncio.to_thread(_read_file_bytes, source)
 
-        logger.info(f"[{self.config.id}] 正在将本地参考图转为 Base64: {image_path}")
-        try:
-            with open(image_path, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-                mime_type = guess_image_content_type(image_path)
-                return f"data:{mime_type};base64,{encoded_string}"
-        except Exception as e:
-            logger.error(f"❌ 读取本地图片失败: {e}")
-            return None
+    async def fetch_reference_data_url(self, source: str, *, timeout: float = REF_DOWNLOAD_TIMEOUT) -> str:
+        """将参考图统一转换为 data URL；已是 data URL 时直接返回，避免重复解码再编码。"""
+        source = str(source or "")
+        if source.startswith("data:image"):
+            return source
+        image_bytes = await self.fetch_reference_bytes(source, timeout=timeout)
+        mime_type = guess_image_content_type(source)
+        encoded = await asyncio.to_thread(_encode_base64, image_bytes)
+        return f"data:{mime_type};base64,{encoded}"
 
     def get_reference_images(self, **kwargs: Any) -> List[str]:
         refs: List[str] = []

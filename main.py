@@ -606,8 +606,12 @@ class OmniDrawPlugin(Star):
             return
         with self._config_lock:
             current_mtime = self._get_mtime(self._native_config_path)
+            # 快速路径：文件 mtime 未变说明配置没被改过，跳过整文件读取 + SHA256，避免每条指令都重算签名。
+            if current_mtime and current_mtime == self._native_config_mtime and self._native_config_signature:
+                return
             current_signature = self._file_signature(self._native_config_path)
             if current_signature and current_signature == self._native_config_signature:
+                self._native_config_mtime = current_mtime
                 return
             native_config = self._clean_runtime_config(self._load_json_file(self._native_config_path))
             if not native_config:

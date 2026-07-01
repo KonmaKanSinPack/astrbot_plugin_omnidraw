@@ -19,7 +19,7 @@ from .utils import save_image_bytes, split_data_url
 
 PLUGIN_NAME = "astrbot_plugin_omnidraw"
 PLUGIN_AUTHOR = "雪碧bir"
-PLUGIN_VERSION = "3.3.21"
+PLUGIN_VERSION = "3.3.22"
 DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS = 24
 DEFAULT_MAX_CACHE_SIZE_MB = 512
 
@@ -344,7 +344,7 @@ def _normalize_api_type(value: Any, is_video: bool) -> str:
         if "sync" in lowered or "同步" in raw:
             return "openai_sync"
         return "async_task"
-    if lowered in {"gemini", "gemini_official", "google_gemini"} or "gemini" in lowered or "gemini" in raw.lower():
+    if "gemini" in lowered:
         return APIType.GEMINI_OFFICIAL
     if lowered in {"custom_endpoint", "custom"} or "自定义" in raw:
         return APIType.CUSTOM_ENDPOINT
