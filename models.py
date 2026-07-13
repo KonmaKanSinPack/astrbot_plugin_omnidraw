@@ -19,7 +19,7 @@ from .utils import save_image_bytes, split_data_url
 
 PLUGIN_NAME = "astrbot_plugin_omnidraw"
 PLUGIN_AUTHOR = "雪碧bir"
-PLUGIN_VERSION = "3.3.22"
+PLUGIN_VERSION = "3.3.23"
 DEFAULT_CACHE_CLEANUP_INTERVAL_HOURS = 24
 DEFAULT_MAX_CACHE_SIZE_MB = 512
 
@@ -63,6 +63,7 @@ class PluginConfig:
     chains: Dict[str, List[str]]
     presets: Dict[str, str]
     enable_optimizer: bool
+    optimizer_use_astrbot_provider: bool
     optimizer_model: str
     optimizer_timeout: float
     max_batch_count: int
@@ -237,6 +238,7 @@ class PluginConfig:
             chains=chains,
             presets=presets_dict,
             enable_optimizer=_to_bool(opt_conf.get("enable_optimizer", True)),
+            optimizer_use_astrbot_provider=_to_bool(opt_conf.get("use_astrbot_provider", False)),
             optimizer_model=optimizer_model or "gpt-4o-mini",
             optimizer_timeout=_to_float(opt_conf.get("optimizer_timeout", 15.0), 15.0, minimum=1.0),
             max_batch_count=_to_int(opt_conf.get("max_batch_count", 0), 0, minimum=0),
@@ -339,6 +341,8 @@ def _normalize_api_type(value: Any, is_video: bool) -> str:
         return "async_task" if is_video else "openai_image"
     lowered = raw.lower()
     if is_video:
+        if lowered.startswith("async") or "异步" in raw:
+            return "async_task"
         if "chat" in lowered or "对话" in raw:
             return "openai_chat"
         if "sync" in lowered or "同步" in raw:

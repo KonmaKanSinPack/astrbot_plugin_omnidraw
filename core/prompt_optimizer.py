@@ -3,14 +3,15 @@ import json
 import re
 import aiohttp
 import asyncio
-from typing import Optional
+from typing import Any, Optional
 from astrbot.api import logger
 from ..models import PluginConfig
 from ..providers.base import build_chat_completions_endpoint, next_api_key
 
 class PromptOptimizer:
-    def __init__(self, config: PluginConfig):
+    def __init__(self, config: PluginConfig, context: Optional[Any] = None):
         self.config = config
+        self.context = context
 
     async def optimize(self, raw_action: str, count: int = 1, session: Optional[aiohttp.ClientSession] = None) -> list:
         if not getattr(self.config, "enable_optimizer", True):
@@ -18,16 +19,21 @@ class PromptOptimizer:
 
         if not raw_action or raw_action.strip() == "": return [raw_action] * count
 
-        chain = self.config.chains.get("optimizer", [])
-        provider = self.config.get_provider(chain[0]) if chain else (self.config.providers[0] if self.config.providers else None)
-        if not provider or not provider.base_url:
-            return [raw_action] * count
+        use_astrbot_provider = getattr(self.config, "optimizer_use_astrbot_provider", False)
+        provider = None
+        endpoint = ""
+        headers = {}
+        if not use_astrbot_provider:
+            chain = self.config.chains.get("optimizer", [])
+            provider = self.config.get_provider(chain[0]) if chain else (self.config.providers[0] if self.config.providers else None)
+            if not provider or not provider.base_url:
+                return [raw_action] * count
 
-        endpoint = build_chat_completions_endpoint(provider.base_url)
-        api_key = next_api_key(provider.id, provider.api_keys)
-        if not endpoint or not api_key:
-            return [raw_action] * count
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            endpoint = build_chat_completions_endpoint(provider.base_url)
+            api_key = next_api_key(provider.id, provider.api_keys)
+            if not endpoint or not api_key:
+                return [raw_action] * count
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
         # ==========================================
         # 🚀 动态风格插槽系统 (Dynamic Style Engine)
@@ -159,21 +165,45 @@ OUTPUT FORMAT:
 
         session_obj = session
         close_session = False
-        if session_obj is None:
+        if not use_astrbot_provider and session_obj is None:
             session_obj = aiohttp.ClientSession()
             close_session = True
 
         try:
             try:
                 timeout_val = self.config.optimizer_timeout * (1.5 if count > 1 else 1.0)
-                logger.info(f"🧠 [副脑] 正在以【{style_choice}】风格重构提示词 (模型: {self.config.optimizer_model})")
+                if use_astrbot_provider:
+                    if self.context is None:
+                        raise RuntimeError("未取得 AstrBot Context，无法调用当前文本模型")
+                    active_provider = self.context.get_using_provider()
+                    if active_provider is None:
+                        raise RuntimeError("AstrBot 当前未配置可用的文本模型")
+                    provider_id = active_provider.meta().id
+                    logger.info(f"🧠 [副脑] 正在以【{style_choice}】风格调用 AstrBot 文本模型 ({provider_id})")
+                    llm_response = await asyncio.wait_for(
+                        self.context.llm_generate(
+                            chat_provider_id=provider_id,
+                            prompt=raw_action,
+                            system_prompt=sys_prompt,
+                            max_tokens=payload["max_tokens"],
+                            temperature=payload["temperature"],
+                            response_format=payload["response_format"],
+                        ),
+                        timeout=timeout_val,
+                    )
+                    raw_content = str(getattr(llm_response, "completion_text", "") or "").strip()
+                else:
+                    logger.info(f"🧠 [副脑] 正在以【{style_choice}】风格重构提示词 (模型: {self.config.optimizer_model})")
+                    async with session_obj.post(endpoint, headers=headers, json=payload, timeout=timeout_val) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+                    raw_content = (
+                        data["choices"][0]["message"]["content"].strip()
+                        if data.get("choices")
+                        else ""
+                    )
 
-                async with session_obj.post(endpoint, headers=headers, json=payload, timeout=timeout_val) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
-
-                    if "choices" in data and len(data["choices"]) > 0:
-                        raw_content = data["choices"][0]["message"]["content"].strip()
+                if raw_content:
 
                         start_idx = raw_content.find('{')
                         end_idx = raw_content.rfind('}')
