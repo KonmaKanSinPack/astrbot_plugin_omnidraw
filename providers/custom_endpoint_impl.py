@@ -1,8 +1,9 @@
 """Custom full-endpoint image provider."""
 
+import asyncio
 import json
 from typing import Any, Dict, List
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import aiohttp
 from astrbot.api import logger
@@ -22,6 +23,17 @@ from .base import (
 
 class CustomEndpointProvider(BaseProvider):
     """Request exactly the configured URL while adapting payloads by endpoint shape."""
+
+    TASK_POLL_INTERVAL_SECONDS = 2
+
+    @staticmethod
+    def _coerce_json_value(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return value
 
     async def _get_image_bytes(self, image_path_or_url: str) -> bytes:
         return await self.fetch_reference_bytes(image_path_or_url)
@@ -49,6 +61,47 @@ class CustomEndpointProvider(BaseProvider):
 
     def _endpoint_path(self, endpoint: str) -> str:
         return urlparse(endpoint).path.rstrip("/").lower()
+
+    @classmethod
+    def _extract_task_id(cls, payload: Any) -> str:
+        if isinstance(payload, dict):
+            task_id = payload.get("task_id")
+            if task_id:
+                return str(task_id)
+            status = str(payload.get("status", payload.get("task_status", ""))).lower()
+            if status in {"submitted", "pending", "queued", "processing", "running"} and payload.get("id"):
+                return str(payload["id"])
+            for value in payload.values():
+                task_id = cls._extract_task_id(value)
+                if task_id:
+                    return task_id
+        elif isinstance(payload, (list, tuple)):
+            for item in payload:
+                task_id = cls._extract_task_id(item)
+                if task_id:
+                    return task_id
+        return ""
+
+    @classmethod
+    def _extract_task_status(cls, payload: Any) -> str:
+        if isinstance(payload, dict):
+            status = payload.get("status", payload.get("task_status", payload.get("state", "")))
+            if status:
+                return str(status).lower()
+            for value in payload.values():
+                status = cls._extract_task_status(value)
+                if status:
+                    return status
+        elif isinstance(payload, (list, tuple)):
+            for item in payload:
+                status = cls._extract_task_status(item)
+                if status:
+                    return status
+        return ""
+
+    def _task_poll_url(self, endpoint: str, task_id: str) -> str:
+        parsed = urlparse(endpoint)
+        return f"{parsed.scheme}://{parsed.netloc}/api/tasks/{quote(task_id, safe='')}"
 
     def _build_chat_payload(self, prompt: str, encoded_images: List[str], api_kwargs: Dict[str, Any]) -> Dict[str, Any]:
         content: List[Dict[str, Any]] = []
@@ -98,7 +151,8 @@ class CustomEndpointProvider(BaseProvider):
         logger.info(f"📤 [自定义通道] 请求完整路径: {summarize_url_for_log(endpoint)}")
         logger.info(f"📤 [自定义通道] 请求体摘要: {summarize_payload_json_for_log(payload)}")
         async with self.session.post(endpoint, json=payload, headers=headers, timeout=timeout_obj) as response:
-            return await self._parse_response(response, endpoint)
+            response_payload = await self._read_response_payload(response)
+        return await self._resolve_response(response_payload, endpoint, headers)
 
     async def _post_edits_form(
         self,
@@ -129,27 +183,59 @@ class CustomEndpointProvider(BaseProvider):
         timeout_obj = aiohttp.ClientTimeout(total=self.config.timeout)
         logger.info(f"📤 [自定义通道] 以 multipart 请求完整路径: {summarize_url_for_log(endpoint)}")
         async with self.session.post(endpoint, data=data, headers=headers, timeout=timeout_obj) as response:
-            return await self._parse_response(response, endpoint)
+            response_payload = await self._read_response_payload(response)
+        return await self._resolve_response(response_payload, endpoint, headers)
 
-    async def _parse_response(self, response: aiohttp.ClientResponse, endpoint: str) -> str:
+    async def _read_response_payload(self, response: aiohttp.ClientResponse) -> Any:
         text = await response.text()
         if response.status >= 400:
             logger.error("💥 自定义通道 API 返回错误摘要: " + summarize_response_text_for_log(text, max_string_length=500))
             raise RuntimeError(f"HTTP {response.status}: {extract_error_message(text)}")
 
         try:
-            payload = json.loads(text)
+            return json.loads(text)
         except Exception:
-            payload = text
+            return text
 
+    async def _resolve_response(self, payload: Any, endpoint: str, headers: Dict[str, str]) -> str:
         image_url = extract_image_url_from_response(payload, endpoint)
         if image_url:
             return image_url
+        task_id = self._extract_task_id(payload)
+        if task_id:
+            return await self._poll_task_result(endpoint, task_id, headers)
         if isinstance(payload, (dict, list, tuple)):
             payload_summary = summarize_payload_json_for_log(payload, max_string_length=500)
         else:
             payload_summary = summarize_text_for_log(str(payload), max_string_length=500)
         raise ValueError("自定义接口返回结构异常，未找到图片数据: " + payload_summary)
+
+    async def _poll_task_result(self, endpoint: str, task_id: str, headers: Dict[str, str]) -> str:
+        poll_url = self._task_poll_url(endpoint, task_id)
+        poll_interval = max(0.0, float(self.TASK_POLL_INTERVAL_SECONDS))
+        attempts = max(1, int(float(self.config.timeout) / max(1.0, poll_interval)))
+        for attempt in range(attempts):
+            if attempt:
+                await asyncio.sleep(poll_interval)
+            logger.info(f"⏳ [自定义通道] 轮询图片任务 {task_id} ({attempt + 1}/{attempts})")
+            async with self.session.get(
+                poll_url,
+                headers=headers,
+                timeout=min(15.0, float(self.config.timeout)),
+            ) as response:
+                payload = await self._read_response_payload(response)
+
+            image_url = extract_image_url_from_response(payload, endpoint)
+            if image_url:
+                return image_url
+            status = self._extract_task_status(payload)
+            if status in {"fail", "failed", "failure", "error", "cancelled", "canceled"}:
+                raise RuntimeError(
+                    "异步图片任务失败: "
+                    + summarize_payload_json_for_log(payload, max_string_length=500)
+                )
+
+        raise TimeoutError(f"异步图片任务 {task_id} 在 {self.config.timeout} 秒内未完成。")
 
     async def generate_image(self, prompt: str, **kwargs: Any) -> str:
         current_key = self.get_current_key()
@@ -162,7 +248,11 @@ class CustomEndpointProvider(BaseProvider):
         endpoint_path = self._endpoint_path(endpoint)
         ref_images = self.get_reference_images(**kwargs)
         internal_keys = {"user_refs", "user_ref", "persona_refs", "persona_ref"}
-        api_kwargs = {key: value for key, value in kwargs.items() if key not in internal_keys}
+        api_kwargs = {
+            key: self._coerce_json_value(value)
+            for key, value in kwargs.items()
+            if key not in internal_keys
+        }
         headers = {"Authorization": "Bearer " + current_key}
 
         logger.info(f"📝 [自定义通道] 最终发送给 API 的核心提示词:\n{prompt}")

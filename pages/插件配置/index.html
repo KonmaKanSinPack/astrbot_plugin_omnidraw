@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#C1E6FF" />
     <title>OmniDraw Station</title>
     <link rel="icon" href="./logo.png" />
-    <link rel="stylesheet" href="./style.css?v=3.3.22" />
+    <link rel="stylesheet" href="./style.css?v=3.3.23" />
 </head>
 <body>
     <div class="app-shell">
@@ -396,6 +396,12 @@
                     </div>
                     <div class="form-grid">
                         <div class="form-group">
+                            <label class="switch-row" for="opt_astrbot">
+                                <span>使用 AstrBot 当前文本模型</span>
+                                <input type="checkbox" id="opt_astrbot" class="ios-switch" />
+                            </label>
+                        </div>
+                        <div class="form-group">
                             <label for="opt_style">画风协议</label>
                             <select id="opt_style" class="input-modern">
                                 <option value="手机日常原生感">手机日常原生感</option>
@@ -471,6 +477,6 @@
     </div>
 
     <div id="toast-container" aria-live="polite"></div>
-    <script type="module" src="./app.js?v=3.3.22"></script>
+    <script type="module" src="./app.js?v=3.3.23"></script>
 </body>
 </html>

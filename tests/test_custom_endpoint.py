@@ -131,6 +131,7 @@ openai_chat_module = importlib.import_module(f"{PACKAGE_NAME}.providers.openai_c
 provider_factory_module = importlib.import_module(f"{PACKAGE_NAME}.providers")
 chain_manager_module = importlib.import_module(f"{PACKAGE_NAME}.core.chain_manager")
 video_manager_module = importlib.import_module(f"{PACKAGE_NAME}.core.video_manager")
+prompt_optimizer_module = importlib.import_module(f"{PACKAGE_NAME}.core.prompt_optimizer")
 main_module = importlib.import_module(f"{PACKAGE_NAME}.main")
 
 ProviderConfig = models_module.ProviderConfig
@@ -140,6 +141,7 @@ ChainRunResult = chain_manager_module.ChainRunResult
 ChainManager = chain_manager_module.ChainManager
 OmniDrawPlugin = main_module.OmniDrawPlugin
 VideoManager = video_manager_module.VideoManager
+PromptOptimizer = prompt_optimizer_module.PromptOptimizer
 extract_error_message = base_module.extract_error_message
 extract_image_url_from_response = base_module.extract_image_url_from_response
 is_complete_endpoint_url = base_module.is_complete_endpoint_url
@@ -205,6 +207,11 @@ class CustomEndpointHelpersTest(unittest.TestCase):
         self.assertEqual(_normalize_api_type("gemini_official", is_video=False), "gemini_official")
         self.assertEqual(_normalize_api_type("Gemini", is_video=False), "gemini_official")
         self.assertEqual(_normalize_api_type("Gemini 官方", is_video=False), "gemini_official")
+
+    def test_video_async_task_is_not_misclassified_as_sync(self):
+        self.assertEqual(_normalize_api_type("async_task", is_video=True), "async_task")
+        self.assertEqual(_normalize_api_type("异步轮询", is_video=True), "async_task")
+        self.assertEqual(_normalize_api_type("openai_sync", is_video=True), "openai_sync")
 
     def test_extracts_gemini_inline_data_response(self):
         endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent"
@@ -479,6 +486,17 @@ class RuntimeConfigKeyTest(unittest.TestCase):
         for option in schema_options:
             self.assertIn(f'value="{option}"', index_html)
 
+    def test_astrbot_optimizer_toggle_is_available_in_schema_and_pages(self):
+        schema = json.loads((PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8"))
+        toggle = schema["optimizer_config"]["items"]["use_astrbot_provider"]
+        self.assertEqual(toggle["type"], "bool")
+        self.assertFalse(toggle["default"])
+
+        index_html = (PLUGIN_DIR / "pages" / "插件配置" / "index.html").read_text(encoding="utf-8")
+        app_js = (PLUGIN_DIR / "pages" / "插件配置" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="opt_astrbot"', index_html)
+        self.assertIn("use_astrbot_provider", app_js)
+
     def test_tests_directory_is_not_gitignored(self):
         gitignore = (PLUGIN_DIR / ".gitignore").read_text(encoding="utf-8")
 
@@ -495,6 +513,120 @@ class RuntimeConfigKeyTest(unittest.TestCase):
         )
 
         self.assertIsInstance(provider_factory_module.create_provider(config, session=object()), GeminiOfficialProvider)
+
+
+class PromptOptimizerAstrBotProviderTest(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_current_astrbot_chat_provider_without_image_endpoint(self):
+        config = PluginConfig.from_dict(
+            {
+                "optimizer_config": {
+                    "enable_optimizer": True,
+                    "use_astrbot_provider": True,
+                    "optimizer_timeout": 5,
+                }
+            },
+            str(PLUGIN_DIR),
+        )
+        calls = []
+
+        class ActiveProvider:
+            def meta(self):
+                return types.SimpleNamespace(id="astrbot-chat")
+
+        class Context:
+            def get_using_provider(self):
+                return ActiveProvider()
+
+            async def llm_generate(self, **kwargs):
+                calls.append(kwargs)
+                return types.SimpleNamespace(
+                    completion_text=json.dumps(
+                        {
+                            "subject_appearance": "a cat",
+                            "environment_and_scene": "a quiet room",
+                        }
+                    )
+                )
+
+        results = await PromptOptimizer(config, Context()).optimize("画一只猫")
+
+        self.assertEqual(len(results), 1)
+        self.assertIn("a cat", results[0])
+        self.assertEqual(calls[0]["chat_provider_id"], "astrbot-chat")
+        self.assertEqual(calls[0]["prompt"], "画一只猫")
+        self.assertIn("Output ONLY ONE valid JSON object", calls[0]["system_prompt"])
+
+
+class PersonaCommandTest(unittest.IsolatedAsyncioTestCase):
+    def _plugin(self):
+        plugin = object.__new__(OmniDrawPlugin)
+        persona = types.SimpleNamespace(
+            id="persona_2",
+            name="测试人设",
+            base_prompt="fixed appearance",
+            ref_images=["https://cdn.example.com/ref-1.png", "C:/refs/ref-2.png"],
+        )
+        plugin.plugin_config = types.SimpleNamespace(
+            active_persona_id="persona_2",
+            personas=[persona],
+        )
+        plugin._permission_denied_message = lambda event: ""
+        plugin._find_persona_profile = lambda selector: persona if selector in {"persona_2", "测试人设", "1"} else None
+        plugin._extract_command_message = lambda event, command, fallback="": fallback
+        plugin._create_image_component = lambda ref: {"type": "image", "ref": ref}
+        return plugin, persona
+
+    async def test_view_persona_returns_details_and_all_reference_images(self):
+        plugin, _ = self._plugin()
+
+        class Event:
+            def chain_result(self, components):
+                return components
+
+            def plain_result(self, text):
+                return text
+
+        results = [
+            result
+            async for result in plugin.cmd_persona_view(Event(), "persona_2")
+        ]
+
+        self.assertEqual(len(results), 1)
+        self.assertIn("测试人设", results[0][0].text)
+        self.assertIn("fixed appearance", results[0][0].text)
+        self.assertEqual(
+            results[0][1:],
+            [
+                {"type": "image", "ref": "https://cdn.example.com/ref-1.png"},
+                {"type": "image", "ref": "C:/refs/ref-2.png"},
+            ],
+        )
+
+    def test_update_persona_profile_persists_name(self):
+        plugin, _ = self._plugin()
+        plugin.raw_config = {
+            "persona_config": {
+                "profiles": [
+                    {
+                        "id": "persona_2",
+                        "persona_name": "旧名称",
+                        "persona_base_prompt": "fixed appearance",
+                        "persona_ref_image": [],
+                    }
+                ]
+            }
+        }
+        calls = []
+        plugin._apply_runtime_config = lambda config: calls.append(("apply", config))
+        plugin._persist_config = lambda: calls.append(("persist", None))
+        plugin._safe_update_context_config = lambda: calls.append(("sync", None))
+
+        updated = plugin._update_persona_profile("persona_2", "name", "新名称")
+
+        self.assertTrue(updated)
+        profile = plugin.raw_config["persona_config"]["profiles"][0]
+        self.assertEqual(profile["persona_name"], "新名称")
+        self.assertEqual([call[0] for call in calls], ["apply", "persist", "sync"])
 
 
 class ImageSuccessComponentsTest(unittest.TestCase):
@@ -787,6 +919,7 @@ class PluginImageReturnTest(unittest.IsolatedAsyncioTestCase):
         plugin.plugin_config.persona_ref_images = ["persona-ref.png"]
         plugin.plugin_config.chains = {"selfie": ["selfie_node_1"]}
         send_calls = []
+        sent_events = []
         original_client_session = main_module.aiohttp.ClientSession
         original_chain_manager = main_module.ChainManager
 
@@ -803,14 +936,17 @@ class PluginImageReturnTest(unittest.IsolatedAsyncioTestCase):
                 )
 
         async def fake_send_generated_images(event, results, *args, **kwargs):
+            sent_events.append(event)
             send_calls.extend(results)
             return len(results)
 
         main_module.aiohttp.ClientSession = FakeClientSession
         main_module.ChainManager = FakeChainManager
         plugin._send_generated_images = fake_send_generated_images
+        raw_event = object()
+        wrapped_event = types.SimpleNamespace(context=types.SimpleNamespace(event=raw_event))
         try:
-            message = await plugin.tool_generate_selfie(object(), "look at camera", count=1)
+            message = await plugin.tool_generate_selfie(wrapped_event, "look at camera", count=1)
         finally:
             main_module.aiohttp.ClientSession = original_client_session
             main_module.ChainManager = original_chain_manager
@@ -818,6 +954,7 @@ class PluginImageReturnTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("已成功生成并下发了 1 张图", message)
         self.assertEqual(len(send_calls), 1)
         self.assertEqual(send_calls[0].image_url, "https://cdn.example.com/old-selfie.png")
+        self.assertIs(sent_events[0], raw_event)
         self.assertEqual(plugin._recorded_count, 1)
 
     async def test_existing_generate_image_tool_still_sends_images(self):
@@ -1540,6 +1677,77 @@ class VideoSuccessMetadataTest(unittest.TestCase):
         self.assertEqual(manager._apply_provider_defaults(provider, {"resolution": "720p"}), {"resolution": "720p"})
 
 
+class VideoAsyncTaskTest(unittest.IsolatedAsyncioTestCase):
+    async def test_list_task_id_polls_api_tasks_endpoint(self):
+        config = PluginConfig.from_dict(
+            {
+                "video_providers": [
+                    {
+                        "id": "video_node",
+                        "api_type": "async_task",
+                        "base_url": "https://api.example.com/v1",
+                        "api_keys": "submit-key\nother-key",
+                        "model": "video-model",
+                        "timeout": 30,
+                    }
+                ]
+            },
+            str(PLUGIN_DIR),
+        )
+        manager = VideoManager(config)
+        provider = config.video_providers[0]
+
+        class SequenceSession:
+            def __init__(self):
+                self.posts = []
+                self.gets = []
+
+            def post(self, url, **kwargs):
+                self.posts.append({"url": url, **kwargs})
+                return FakePost(
+                    FakeResponse(
+                        {"code": 200, "data": [{"status": "submitted", "task_id": "task_video_1"}]}
+                    )
+                )
+
+            def get(self, url, **kwargs):
+                self.gets.append({"url": url, **kwargs})
+                return FakePost(
+                    FakeResponse(
+                        {
+                            "code": 200,
+                            "data": [
+                                {
+                                    "status": "completed",
+                                    "task_id": "task_video_1",
+                                    "url": "https://cdn.example.com/out.mp4",
+                                }
+                            ],
+                        }
+                    )
+                )
+
+        session = SequenceSession()
+        original_sleep = video_manager_module.asyncio.sleep
+
+        async def no_sleep(_seconds):
+            return None
+
+        video_manager_module.asyncio.sleep = no_sleep
+        try:
+            result = await manager._fetch_video_from_api(provider, "a quiet scene", session)
+        finally:
+            video_manager_module.asyncio.sleep = original_sleep
+
+        self.assertEqual(result, "https://cdn.example.com/out.mp4")
+        self.assertEqual(session.posts[0]["url"], "https://api.example.com/v1/videos/generations")
+        self.assertEqual(session.gets[0]["url"], "https://api.example.com/api/tasks/task_video_1")
+        self.assertEqual(
+            session.gets[0]["headers"]["Authorization"],
+            session.posts[0]["headers"]["Authorization"],
+        )
+
+
 class GeminiOfficialProviderTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         fake_logger.messages.clear()
@@ -1684,6 +1892,87 @@ class CustomEndpointProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.posts[0]["url"], endpoint)
         self.assertEqual(session.posts[0]["json"]["prompt"], "draw a cat")
         self.assertEqual(session.posts[0]["json"]["size"], "1024x1024")
+
+    async def test_custom_json_payload_restores_non_string_parameter_types(self):
+        endpoint = "https://api.example.com/v1/images/generations"
+        provider, session = self._provider(endpoint, {"data": [{"url": "https://cdn.example.com/out.png"}]})
+
+        await provider.generate_image(
+            "draw a cat",
+            watermark="false",
+            steps="20",
+            cfg_scale="7.5",
+            tags='["portrait", "photo"]',
+            metadata='{"source": "test"}',
+            size="1024x1024",
+        )
+
+        payload = session.posts[0]["json"]
+        self.assertIs(payload["watermark"], False)
+        self.assertEqual(payload["steps"], 20)
+        self.assertEqual(payload["cfg_scale"], 7.5)
+        self.assertEqual(payload["tags"], ["portrait", "photo"])
+        self.assertEqual(payload["metadata"], {"source": "test"})
+        self.assertEqual(payload["size"], "1024x1024")
+
+    async def test_custom_endpoint_polls_submitted_task_id_until_image_is_ready(self):
+        endpoint = "https://api.example.com/v1/images/generations"
+        config = ProviderConfig(
+            id="custom_node",
+            api_type="custom_endpoint",
+            base_url=endpoint,
+            api_keys=["test-key"],
+            model="image-model",
+            timeout=30.0,
+        )
+
+        class SequenceSession:
+            def __init__(self):
+                self.posts = []
+                self.gets = []
+                self.poll_responses = [
+                    FakeResponse({"code": 200, "data": [{"status": "processing", "task_id": "task_123"}]}),
+                    FakeResponse(
+                        {
+                            "code": 200,
+                            "data": [
+                                {
+                                    "status": "completed",
+                                    "task_id": "task_123",
+                                    "url": "https://cdn.example.com/async-out.png",
+                                }
+                            ],
+                        }
+                    ),
+                ]
+
+            def post(self, url, **kwargs):
+                self.posts.append({"url": url, **kwargs})
+                return FakePost(
+                    FakeResponse(
+                        {"code": 200, "data": [{"status": "submitted", "task_id": "task_123"}]}
+                    )
+                )
+
+            def get(self, url, **kwargs):
+                self.gets.append({"url": url, **kwargs})
+                return FakePost(self.poll_responses.pop(0))
+
+        session = SequenceSession()
+        provider = CustomEndpointProvider(config, session)
+        provider.TASK_POLL_INTERVAL_SECONDS = 0
+
+        result = await provider.generate_image("draw a cat")
+
+        self.assertEqual(result, "https://cdn.example.com/async-out.png")
+        self.assertEqual(len(session.posts), 1)
+        self.assertEqual(
+            [item["url"] for item in session.gets],
+            [
+                "https://api.example.com/api/tasks/task_123",
+                "https://api.example.com/api/tasks/task_123",
+            ],
+        )
 
     async def test_custom_image_payload_uses_siliconflow_reference_fields(self):
         endpoint = "https://api.example.com/v1/images/generations"

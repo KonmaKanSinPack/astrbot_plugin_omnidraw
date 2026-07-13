@@ -5,6 +5,7 @@ import os
 import re
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote, urlparse
 
 import aiohttp
 from astrbot.api import logger
@@ -124,13 +125,58 @@ class VideoManager:
             return f"HTTP {response.status}"
         return f"HTTP {response.status}: {text[:1000]}"
 
-    async def _poll_task_result(self, provider: ProviderConfig, task_id: str, session: aiohttp.ClientSession) -> str:
+    @classmethod
+    def _extract_task_id(cls, payload: Any) -> str:
+        if isinstance(payload, dict):
+            task_id = payload.get("task_id")
+            if task_id:
+                return str(task_id)
+            status = str(payload.get("status", payload.get("task_status", ""))).lower()
+            if status in {"submitted", "pending", "queued", "processing", "running"} and payload.get("id"):
+                return str(payload["id"])
+            for value in payload.values():
+                task_id = cls._extract_task_id(value)
+                if task_id:
+                    return task_id
+        elif isinstance(payload, (list, tuple)):
+            for item in payload:
+                task_id = cls._extract_task_id(item)
+                if task_id:
+                    return task_id
+        return ""
+
+    @classmethod
+    def _extract_task_status(cls, payload: Any) -> str:
+        if isinstance(payload, dict):
+            status = payload.get("status", payload.get("task_status", payload.get("state", "")))
+            if status:
+                return str(status).upper()
+            for value in payload.values():
+                status = cls._extract_task_status(value)
+                if status:
+                    return status
+        elif isinstance(payload, (list, tuple)):
+            for item in payload:
+                status = cls._extract_task_status(item)
+                if status:
+                    return status
+        return ""
+
+    def _task_poll_url(self, provider: ProviderConfig, task_id: str, submission: Dict[str, Any]) -> str:
         endpoint = build_video_generations_endpoint(provider.base_url)
-        poll_url = f"{endpoint}/{task_id}"
-        headers = {
-            "Authorization": f"Bearer {self._get_api_key(provider)}",
-            "Content-Type": "application/json",
-        }
+        if isinstance(submission.get("data"), list):
+            parsed = urlparse(endpoint)
+            return f"{parsed.scheme}://{parsed.netloc}/api/tasks/{quote(task_id, safe='')}"
+        return f"{endpoint}/{quote(task_id, safe='')}"
+
+    async def _poll_task_result(
+        self,
+        provider: ProviderConfig,
+        task_id: str,
+        session: aiohttp.ClientSession,
+        poll_url: str,
+        headers: Dict[str, str],
+    ) -> str:
         max_retries = max(1, int(provider.timeout) // 10)
 
         for attempt in range(max_retries):
@@ -142,7 +188,7 @@ class VideoManager:
                         continue
                     data = await response.json()
 
-                status = str(data.get("status", data.get("task_status", ""))).upper()
+                status = self._extract_task_status(data)
                 logger.info(f"⏳ [视频轮询] Task ID: {task_id}, 状态: {status} (尝试 {attempt + 1}/{max_retries})")
 
                 if status in {"SUCCESS", "SUCCEEDED", "COMPLETED"}:
@@ -214,14 +260,13 @@ class VideoManager:
                     raise VideoTaskError(await self._read_error(response))
                 data = await response.json()
 
-            task_id = data.get("id") or data.get("task_id")
-            if not task_id and isinstance(data.get("data"), dict):
-                task_id = data["data"].get("task_id") or data["data"].get("id")
+            task_id = self._extract_task_id(data)
             if not task_id:
                 raise VideoTaskError(f"提交成功但未找到任务 ID。API 原始返回: {data}")
 
             logger.info(f"✅ 任务提交成功，获得 Task ID: {task_id}，即将进入轮询。")
-            return await self._poll_task_result(provider, str(task_id), session)
+            poll_url = self._task_poll_url(provider, str(task_id), data)
+            return await self._poll_task_result(provider, str(task_id), session, poll_url, headers)
 
         if api_type.startswith("openai_sync"):
             payload = {"model": provider.model, "prompt": prompt}

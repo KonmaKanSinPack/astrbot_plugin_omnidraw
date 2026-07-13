@@ -568,7 +568,7 @@ class OmniDrawPlugin(Star):
         self.plugin_config = PluginConfig.from_dict(self.raw_config, self.data_dir)
         self.persona_manager = PersonaManager(self.plugin_config)
         self.video_manager = VideoManager(self.plugin_config)
-        self.prompt_optimizer = PromptOptimizer(self.plugin_config)
+        self.prompt_optimizer = PromptOptimizer(self.plugin_config, self.context)
         self._restart_cache_cleanup_task()
         self._prune_cache_if_needed("config_reload")
 
@@ -1650,6 +1650,11 @@ class OmniDrawPlugin(Star):
             return plain_text
         return str(getattr(event, "message_obj", "") or "").strip()
 
+    def _unwrap_message_event(self, event: Any) -> Any:
+        wrapped_context = getattr(event, "context", None)
+        raw_event = getattr(wrapped_context, "event", None)
+        return raw_event if raw_event is not None else event
+
     def _extract_command_message(self, event: AstrMessageEvent, command: str, fallback: str = "") -> str:
         return self._extract_command_message_any(event, (command,), fallback)
 
@@ -1782,6 +1787,18 @@ class OmniDrawPlugin(Star):
         persona_conf = self.raw_config.setdefault("persona_config", {})
         persona_conf["active_persona_id"] = persona_id
         self._apply_runtime_config(self.raw_config)
+
+    def _update_persona_profile(self, persona_id: str, field: str, value: str) -> bool:
+        profiles = self.raw_config.setdefault("persona_config", {}).get("profiles", [])
+        config_key = "persona_name" if field == "name" else "persona_base_prompt"
+        for profile in profiles:
+            if isinstance(profile, dict) and str(profile.get("id", "")).strip() == persona_id:
+                profile[config_key] = value
+                self._apply_runtime_config(self.raw_config)
+                self._persist_config()
+                self._safe_update_context_config()
+                return True
+        return False
 
     def _parse_extra_params(self, extra_params: str) -> Dict[str, Any]:
         if not extra_params:
@@ -2317,6 +2334,7 @@ class OmniDrawPlugin(Star):
         elapsed_seconds: Optional[float] = None,
         include_metadata: bool = False,
     ) -> int:
+        event = self._unwrap_message_event(event)
         sent = 0
         for result in results:
             if not self._get_image_result_url(result):
@@ -2342,7 +2360,9 @@ class OmniDrawPlugin(Star):
             f"{cmd('自拍')} [动作] [--参数 值]\n"
             f"{cmd('视频')} [提示词] [--参数 值]\n"
             f"{cmd('人设')}\n"
+            f"{cmd('查看人设')} [序号/ID/名称]\n"
             f"{cmd('切换人设')} [序号/ID/名称]\n"
+            f"{cmd('修改人设')} [序号/ID/名称] [名称/描述] [新内容]（管理员）\n"
             f"{cmd('切换链路')} [画图/自拍/视频/副脑] [节点ID]\n"
             f"{cmd('切换模型')} [画图/自拍/视频] [序号或名称]\n"
             f"{cmd('签到')}\n"
@@ -2512,8 +2532,91 @@ class OmniDrawPlugin(Star):
         for index, persona in enumerate(self.plugin_config.personas, start=1):
             marker = "👉" if persona.id == self.plugin_config.active_persona_id else "  "
             msg += f"{marker} [{index}] {persona.name} ({persona.id}) · 参考图 {len(persona.ref_images)} 张\n"
-        msg += "\n使用 /切换人设 [序号/ID/名称] 切换自拍人格与对应参考图组。"
+        msg += "\n使用 /查看人设 [序号/ID/名称] 查看详情与参考图，或用 /切换人设 切换当前人设。"
         yield event.plain_result(msg)
+
+    @filter.command("查看人设")
+    @handle_errors
+    async def cmd_persona_view(
+        self,
+        event: AstrMessageEvent,
+        p1: str = "",
+        p2: str = "",
+        p3: str = "",
+        p4: str = "",
+        p5: str = "",
+    ) -> AsyncGenerator[Any, None]:
+        permission_error = self._permission_denied_message(event)
+        if permission_error:
+            yield event.plain_result(permission_error)
+            return
+
+        fallback = " ".join(str(item) for item in [p1, p2, p3, p4, p5] if item).strip()
+        selector = self._extract_command_message(event, "查看人设", fallback)
+        persona = self._find_persona_profile(selector or self.plugin_config.active_persona_id)
+        if not persona:
+            yield event.plain_result(f"{MessageEmoji.WARNING} 找不到人设: {selector}\n可先发送 /人设 查看列表。")
+            return
+
+        description = persona.base_prompt.strip() or "（未设置）"
+        components: List[Any] = [
+            Plain(
+                f"🎭 人设「{persona.name}」\n"
+                f"ID：{persona.id}\n"
+                f"描述：{description}\n"
+                f"参考图：{len(persona.ref_images)} 张"
+            )
+        ]
+        components.extend(self._create_image_component(image_ref) for image_ref in persona.ref_images)
+        yield event.chain_result(components)
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("修改人设")
+    @handle_errors
+    async def cmd_persona_update(
+        self,
+        event: AstrMessageEvent,
+        p1: str = "",
+        p2: str = "",
+        p3: str = "",
+        p4: str = "",
+        p5: str = "",
+        p6: str = "",
+        p7: str = "",
+        p8: str = "",
+        p9: str = "",
+        p10: str = "",
+    ) -> AsyncGenerator[Any, None]:
+        fallback = " ".join(
+            str(item) for item in [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10] if item
+        ).strip()
+        payload = self._extract_command_message(event, "修改人设", fallback)
+        parts = payload.split(maxsplit=2)
+        if len(parts) < 3:
+            yield event.plain_result(
+                f"{MessageEmoji.WARNING} 用法: /修改人设 [序号/ID/名称] [名称/描述] [新内容]"
+            )
+            return
+
+        selector, field_name, value = parts
+        persona = self._find_persona_profile(selector)
+        if not persona:
+            yield event.plain_result(f"{MessageEmoji.WARNING} 找不到人设: {selector}\n可先发送 /人设 查看列表。")
+            return
+
+        field_map = {"名称": "name", "名字": "name", "描述": "prompt", "提示词": "prompt"}
+        field = field_map.get(field_name)
+        if not field:
+            yield event.plain_result(f"{MessageEmoji.WARNING} 仅支持修改“名称”或“描述”。")
+            return
+        if not value.strip():
+            yield event.plain_result(f"{MessageEmoji.WARNING} 新内容不能为空。")
+            return
+
+        if not self._update_persona_profile(persona.id, field, value.strip()):
+            yield event.plain_result(f"{MessageEmoji.WARNING} 人设配置已变化，请重新发送 /人设 后再试。")
+            return
+        yield event.plain_result(f"{MessageEmoji.SUCCESS} 已更新人设「{persona.name}」的{field_name}。")
 
     @filter.command("切换人设")
     @handle_errors
@@ -2914,6 +3017,7 @@ class OmniDrawPlugin(Star):
             return_result (bool): 仅供其他插件显式调用时使用。为 true 时不自动下发图片，而是返回 JSON 图片结果。
             refs (string): 仅在 return_result 为 true 时使用。自拍参考图 URL、本地路径或 data URL；多个参考图可用换行分隔，也可传 JSON 数组字符串。
         """
+        event = self._unwrap_message_event(event)
         permission_error = self._permission_denied_message(event)
         if permission_error:
             return permission_error
@@ -2984,6 +3088,7 @@ class OmniDrawPlugin(Star):
             return_result (bool): 仅供其他插件显式调用时使用。为 true 时不自动下发图片，而是返回 JSON 图片结果。
             refs (string): 仅在 return_result 为 true 时使用。参考图 URL、本地路径或 data URL；多个参考图可用换行分隔，也可传 JSON 数组字符串。
         """
+        event = self._unwrap_message_event(event)
         permission_error = self._permission_denied_message(event)
         if permission_error:
             return permission_error
@@ -3049,6 +3154,7 @@ class OmniDrawPlugin(Star):
             size (string): 分辨率或尺寸参数，例如 1280x720、1920x1080。
             extra_params (string): 附加参数，透传至底层视频引擎，格式为 --key value。
         """
+        event = self._unwrap_message_event(event)
         permission_error = self._permission_denied_message(event)
         if permission_error:
             return permission_error

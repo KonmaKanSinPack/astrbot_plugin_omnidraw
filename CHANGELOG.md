@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.3.23
+
+- 人设指令：新增 `/查看人设`，可查看指定或当前人设的详情与全部参考图；新增管理员 `/修改人设`，可修改现有人设名称或基础描述。
+- 副脑兼容：新增“使用 AstrBot 当前文本模型”开关，开启后通过 AstrBot SDK 调用当前 Chat Provider，避免向完整生图 endpoint 错误拼接 `/v1/chat/completions`。
+- 自定义接口：JSON 附加参数会恢复合法的布尔、数字、数组、对象和 null 类型，普通文本保持字符串。
+- 异步图片：`custom_endpoint` 检测到嵌套 `task_id` 后，会轮询同域名 `/api/tasks/{task_id}` 获取最终图片。
+- AstrBot 4.26 兼容：LLM 生图、自拍和视频工具会从 `ContextWrapper.context.event` 解包原始消息事件，修复结果无法下发的问题。
+- 异步视频：修复 `async_task` 被误判为 `openai_sync`；支持从 `data` 列表提取 task_id、状态并轮询 `/api/tasks/{task_id}`。Issue #53 为 #52 的重复报告，共用同一修复。
+- 测试：增加人设指令、AstrBot 副脑、参数类型、图片异步任务、ContextWrapper 和视频异步任务回归覆盖。
+
 ## 3.3.22
 
 - 性能优化：所有生图 Provider（标准生图、Chat 透传、Gemini 官方、自定义完整路径）与视频节点在读取本地参考图、Base64 编解码时不再阻塞事件循环，改为线程池异步执行；多参考图或高并发场景下机器人整体响应更流畅。
