@@ -71,7 +71,7 @@ class OpenAIProvider(BaseProvider):
                 except Exception as e:
                     raise RuntimeError(f"读取第 {idx} 张参考图数据失败: {e}")
                 data.add_field(
-                    "image",
+                    "image[]",
                     image_bytes,
                     filename=f"reference_{idx}.png",
                     content_type=self._content_type(ref_image),
