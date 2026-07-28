@@ -3053,7 +3053,17 @@ class OmniDrawPlugin(Star):
                 raise RuntimeError("所有绘图节点请求失败")
             sent = await self._send_generated_images(event, valid_results)
             self._record_generated_images(event, sent)
-            return f"系统提示：已成功生成并下发了 {sent} 张图。"
+
+            if self.plugin_config.describe_generated_image:
+                image_refs = []
+                for r in valid_results:
+                    url = self._get_image_result_url(r)
+                    if url:
+                        image_refs.append(url)
+                if image_refs:
+                    return f"已生成并发送 {sent} 张自拍。以下是生成的图像，请用中文简要描述图像内容：\n" + "\n".join(image_refs)
+            return f"已成功生成并发送 {sent} 张自拍。"
+
         except Exception as exc:
             logger.error(f"[OmniDraw] LLM 自拍工具失败: {exc}", exc_info=True)
             if self._plugin_bool(return_result, default=False):
@@ -3063,7 +3073,7 @@ class OmniDrawPlugin(Star):
                     "images": [],
                     "mode": "selfie",
                 }, ensure_ascii=False)
-            return f"系统提示：画图失败 ({exc})。"
+            return f"自拍失败：{self._safe_plugin_error_message(exc)}"
 
     @llm_tool(name="generate_image")
     async def tool_generate_image(
@@ -3123,7 +3133,17 @@ class OmniDrawPlugin(Star):
                 raise RuntimeError("所有绘图节点请求失败")
             sent = await self._send_generated_images(event, valid_results)
             self._record_generated_images(event, sent)
-            return f"系统提示：已成功下发 {sent} 张图。"
+
+            if self.plugin_config.describe_generated_image:
+                image_refs = []
+                for r in valid_results:
+                    url = self._get_image_result_url(r)
+                    if url:
+                        image_refs.append(url)
+                if image_refs:
+                    return f"已生成并发送 {sent} 张图片。以下是生成的图像，请用中文简要描述图像内容：\n" + "\n".join(image_refs)
+            return f"已成功生成并发送 {sent} 张图片。"
+
         except Exception as exc:
             logger.error(f"[OmniDraw] LLM 画图工具失败: {exc}", exc_info=True)
             if self._plugin_bool(return_result, default=False):
@@ -3133,7 +3153,7 @@ class OmniDrawPlugin(Star):
                     "images": [],
                     "mode": "text2img",
                 }, ensure_ascii=False)
-            return f"系统提示：画图失败 ({exc})。"
+            return f"画图失败：{self._safe_plugin_error_message(exc)}"
 
     @llm_tool(name="generate_video")
     async def tool_generate_video(

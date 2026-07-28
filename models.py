@@ -96,6 +96,7 @@ class PluginConfig:
     verbose_report: bool
     show_generation_time: bool
     show_request_model: bool
+    describe_generated_image: bool
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any], data_dir: str) -> "PluginConfig":
@@ -231,6 +232,7 @@ class PluginConfig:
         reply_conf["selfie_pending_message"] = selfie_pending_message
         reply_conf["draw_error_message"] = draw_error_message
         reply_conf["selfie_error_message"] = selfie_error_message
+        reply_conf["describe_generated_image"] = _to_bool(reply_conf.get("describe_generated_image", True))
 
         return cls(
             providers=providers,
@@ -271,6 +273,7 @@ class PluginConfig:
             verbose_report=_to_bool(config_dict.get("verbose_report", False)),
             show_generation_time=_to_bool(config_dict.get("show_generation_time", False)),
             show_request_model=_to_bool(config_dict.get("show_request_model", False)),
+            describe_generated_image=_to_bool(reply_conf.get("describe_generated_image", True)),
         )
 
     def get_provider(self, provider_id: str) -> Optional[ProviderConfig]:
