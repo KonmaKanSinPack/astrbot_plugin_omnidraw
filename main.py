@@ -2994,6 +2994,72 @@ class OmniDrawPlugin(Star):
 
         self._create_background_task(self.video_manager.background_task_runner(event, prompt, safe_refs, kwargs))
 
+    async def _describe_image(self, image_url: str) -> str:
+        """调用 vision LLM 描述图片内容，返回中文描述文本。复用 optimizer 的 provider 配置。"""
+        # 获取可用的 provider（复用 optimizer 链路配置）
+        provider = None
+        chain = self.plugin_config.chains.get("optimizer", [])
+        provider = self.plugin_config.get_provider(chain[0]) if chain else (
+            self.plugin_config.providers[0] if self.plugin_config.providers else None
+        )
+        if not provider or not provider.base_url:
+            return ""
+
+        from .providers.base import build_chat_completions_endpoint, next_api_key
+
+        endpoint = build_chat_completions_endpoint(provider.base_url)
+        api_key = next_api_key(provider.id, provider.api_keys)
+        if not endpoint or not api_key:
+            return ""
+
+        # 将图片转为 data URL
+        data_url = image_url
+        if not image_url.startswith("data:"):
+            try:
+                from .providers.base import guess_image_content_type
+                import aiohttp as _aiohttp
+                import base64 as _base64
+                async with _aiohttp.ClientSession() as _sess:
+                    async with _sess.get(image_url, timeout=_aiohttp.ClientTimeout(total=15)) as _resp:
+                        if _resp.status == 200:
+                            _bytes = await _resp.read()
+                            _mime = guess_image_content_type(image_url)
+                            _b64 = _base64.b64encode(_bytes).decode()
+                            data_url = f"data:{_mime};base64,{_b64}"
+            except Exception:
+                pass  # 转 data URL 失败就用原始 URL
+
+        model = self.plugin_config.optimizer_model or provider.model
+        payload = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "请用中文简要描述这张图片的内容，包括主体、风格、场景和氛围。控制在 100 字以内。"},
+                    {"type": "image_url", "image_url": {"url": data_url}}
+                ]
+            }],
+            "max_tokens": 300,
+            "temperature": 0.7,
+        }
+
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+        try:
+            import aiohttp as _aiohttp
+            timeout = _aiohttp.ClientTimeout(total=30)
+            async with _aiohttp.ClientSession() as _sess:
+                async with _sess.post(endpoint, headers=headers, json=payload, timeout=timeout) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"[OmniDraw] 图片描述 API 返回 {resp.status}")
+                        return ""
+                    data = await resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    return str(content).strip()
+        except Exception as e:
+            logger.warning(f"[OmniDraw] 图片描述失败: {e}")
+            return ""
+
     @llm_tool(name="generate_selfie")
     async def tool_generate_selfie(
         self,
@@ -3055,13 +3121,11 @@ class OmniDrawPlugin(Star):
             self._record_generated_images(event, sent)
 
             if self.plugin_config.describe_generated_image:
-                image_refs = []
-                for r in valid_results:
-                    url = self._get_image_result_url(r)
-                    if url:
-                        image_refs.append(url)
-                if image_refs:
-                    return f"已生成并发送 {sent} 张自拍。以下是生成的图像，请用中文简要描述图像内容：\n" + "\n".join(image_refs)
+                image_url = self._get_image_result_url(valid_results[0])
+                if image_url:
+                    desc = await self._describe_image(image_url)
+                    if desc:
+                        return desc
             return f"已成功生成并发送 {sent} 张自拍。"
 
         except Exception as exc:
@@ -3135,13 +3199,11 @@ class OmniDrawPlugin(Star):
             self._record_generated_images(event, sent)
 
             if self.plugin_config.describe_generated_image:
-                image_refs = []
-                for r in valid_results:
-                    url = self._get_image_result_url(r)
-                    if url:
-                        image_refs.append(url)
-                if image_refs:
-                    return f"已生成并发送 {sent} 张图片。以下是生成的图像，请用中文简要描述图像内容：\n" + "\n".join(image_refs)
+                image_url = self._get_image_result_url(valid_results[0])
+                if image_url:
+                    desc = await self._describe_image(image_url)
+                    if desc:
+                        return desc
             return f"已成功生成并发送 {sent} 张图片。"
 
         except Exception as exc:
