@@ -3110,6 +3110,44 @@ class OmniDrawPlugin(Star):
             logger.warning(f"[OmniDraw] LLM 调用失败: {e}")
             return ""
 
+    async def _judge_llm(self, prompt: str, image_urls: Optional[list] = None,
+                         system_prompt: str = "") -> str:
+        """用 AstrBot provider 调用 LLM（支持 vision）。失败返回空串。
+
+        优先用配置的 quality_provider 节点，否则用 AstrBot 当前使用的文本 provider。
+        通过 provider.text_chat() 调用（AstrBot 抽象层），不自行拼 HTTP。
+        """
+        provider = None
+        provider_id = getattr(self.plugin_config.pose_library, "quality_provider", "")
+        if provider_id:
+            try:
+                getter = getattr(self.context, "get_provider", None)
+                if callable(getter):
+                    provider = getter(provider_id)
+            except Exception:
+                provider = None
+        if provider is None:
+            try:
+                provider = self.context.get_using_provider()
+            except Exception:
+                provider = None
+        if provider is None or not hasattr(provider, "text_chat"):
+            return ""
+
+        try:
+            llm_resp = await provider.text_chat(
+                prompt=prompt,
+                session_id=None,
+                contexts=[],
+                image_urls=image_urls or [],
+                func_tool=None,
+                system_prompt=system_prompt,
+            )
+            return str(getattr(llm_resp, "completion_text", "") or "").strip()
+        except Exception as exc:
+            logger.warning(f"[OmniDraw] AstrBot provider 质检调用失败: {exc}")
+            return ""
+
     async def _translate_pose_tags(self, description: str) -> str:
         """把中文姿势描述翻译成英文动漫 tag 列表（逗号分隔）。"""
         prompt = (
@@ -3117,10 +3155,7 @@ class OmniDrawPlugin(Star):
             "只输出标签本身，逗号分隔，不要任何解释。\n"
             f"描述: {description}"
         )
-        content = await self._call_chat_llm(
-            [{"role": "user", "content": prompt}], max_tokens=200,
-            provider_id=self.plugin_config.pose_library.quality_provider,
-        )
+        content = await self._judge_llm(prompt)
         # 清洗: 去掉多余符号，保留下划线/字母/空格/逗号
         import re as _re
         cleaned = _re.sub(r"[^\w\s,_-]", "", str(content or "")).strip()
@@ -3128,36 +3163,15 @@ class OmniDrawPlugin(Star):
 
     async def _check_pose_image(self, image_url: str) -> bool:
         """vision LLM 判断图片是否适合作为姿势参考图（清晰完整人体姿势）。"""
-        data_url = image_url
-        if not image_url.startswith("data:"):
-            try:
-                from .providers.base import guess_image_content_type
-                import aiohttp as _aiohttp
-                import base64 as _base64
-                async with _aiohttp.ClientSession() as _sess:
-                    async with _sess.get(image_url, timeout=_aiohttp.ClientTimeout(total=15)) as _resp:
-                        if _resp.status == 200:
-                            _bytes = await _resp.read()
-                            _mime = guess_image_content_type(image_url)
-                            _b64 = _base64.b64encode(_bytes).decode()
-                            data_url = f"data:{_mime};base64,{_b64}"
-            except Exception:
-                pass
-
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": (
-                    "这是一张动漫图片。它是否包含清晰、完整、无遮挡过多的人体姿势"
-                    "（适合作为姿势参考图）？仅回答 YES 或 NO。"
-                )},
-                {"type": "image_url", "image_url": {"url": data_url}}
-            ]
-        }]
-        content = await self._call_chat_llm(
-            messages, max_tokens=50,
-            provider_id=self.plugin_config.pose_library.quality_provider,
+        prompt = (
+            "这是一张动漫图片。它是否包含清晰、完整、无遮挡过多的人体姿势"
+            "（适合作为姿势参考图）？仅回答 YES 或 NO。"
         )
+        content = await self._judge_llm(prompt, image_urls=[image_url])
+        if not content:
+            # 调用失败时保守放行，避免误杀全部图片
+            logger.warning("[OmniDraw] 姿势图质检调用失败，放行")
+            return True
         return "YES" in str(content).upper()
 
     @llm_tool(name="generate_selfie")

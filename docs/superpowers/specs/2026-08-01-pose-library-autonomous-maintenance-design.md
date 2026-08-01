@@ -88,22 +88,50 @@ class PoseLibrary:
         # 7. 返回 [{id, file, tags, source_url, description}]
 ```
 
-### `main.py` — LLM 调用封装（质检可配置 provider）
+### `main.py` — LLM 调用封装（质检走 AstrBot provider）
+
+> 更新记录（2026-08-01）: 质检不再走副脑 HTTP chat/completions，
+> 改用 AstrBot provider 抽象层 `text_chat()`（支持 vision）。
 
 ```python
-async def _call_chat_llm(self, messages, max_tokens=300, provider_id=""):
-    """provider_id 指定时用指定 Provider 节点；留空用副脑（optimizer）链路。"""
+async def _judge_llm(self, prompt: str, image_urls: Optional[list] = None,
+                     system_prompt: str = "") -> str:
+    """用 AstrBot provider 调用 LLM（支持 vision）。失败返回空串。
+
+    优先用配置的 quality_provider 节点，否则用 AstrBot 当前使用的文本 provider。
+    通过 provider.text_chat() 调用（AstrBot 抽象层），不自行拼 HTTP。
+    """
     provider = None
+    provider_id = getattr(self.plugin_config.pose_library, "quality_provider", "")
     if provider_id:
-        provider = self.plugin_config.get_provider(provider_id)
+        try:
+            getter = getattr(self.context, "get_provider", None)
+            if callable(getter):
+                provider = getter(provider_id)
+        except Exception:
+            provider = None
     if provider is None:
-        chain = self.plugin_config.chains.get("optimizer", [])
-        provider = ...
-    # → build_chat_completions_endpoint → POST → choices[0].message.content
+        try:
+            provider = self.context.get_using_provider()
+        except Exception:
+            provider = None
+    if provider is None or not hasattr(provider, "text_chat"):
+        return ""
+
+    try:
+        llm_resp = await provider.text_chat(
+            prompt=prompt, session_id=None, contexts=[],
+            image_urls=image_urls or [], func_tool=None,
+            system_prompt=system_prompt,
+        )
+        return str(getattr(llm_resp, "completion_text", "") or "").strip()
+    except Exception as exc:
+        logger.warning(f"[OmniDraw] AstrBot provider 质检调用失败: {exc}")
+        return ""
 ```
 
-质检（`_check_pose_image`）与 tag 翻译（`_translate_pose_tags`）调用时传入
-`provider_id=self.plugin_config.pose_library.quality_provider`，用户可在配置页选择质检模型。
+质检（`_check_pose_image`）传 `image_urls=[image_url]` 走 vision；
+tag 翻译（`_translate_pose_tags`）纯文本调用。质检调用失败时保守放行（返回 True），避免误杀全部图片。
 
 ### `main.py` — 两个新 LLM 工具
 

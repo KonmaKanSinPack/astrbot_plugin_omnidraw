@@ -483,8 +483,10 @@
       "quality_provider": {
         "description": "质检/翻译使用的 Provider 节点 ID",
         "type": "string",
-        "hint": "填写 providers 中支持 vision 的节点 ID（如 node_1），用于姿势图质检和 tag 翻译。留空使用副脑链路（optimizer_config.chain_optimizer）。",
+        "hint": "选择 providers 中支持 vision 的节点",
+        "_special": "select_provider",
         "default": ""
+
       }
     }
   },
