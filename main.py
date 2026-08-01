@@ -99,6 +99,7 @@ CONFIG_KEYS = {
     "usage_config",
     "cache_config",
     "reply_config",
+    "pose_library_config",
     "verbose_report",
     "show_generation_time",
     "show_request_model",
