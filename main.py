@@ -2144,6 +2144,7 @@ class OmniDrawPlugin(Star):
         size: str = "",
         extra_params: str = "",
         refs: Any = None,
+        pose: bool = False,
     ) -> Dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             optimized_actions = await self.prompt_optimizer.optimize(prompt, count, session=session)
@@ -2160,6 +2161,7 @@ class OmniDrawPlugin(Star):
                 kwargs["aspect_ratio"] = aspect_ratio
             if size:
                 kwargs["size"] = size
+            kwargs["pose"] = bool(pose)  # 姿势参考标志（bool 参数）
             kwargs.update(self._parse_extra_params(extra_params))
 
             chain_manager = ChainManager(self.plugin_config, session)
@@ -2188,6 +2190,7 @@ class OmniDrawPlugin(Star):
         size: str = "",
         extra_params: str = "",
         refs: Any = None,
+        pose: bool = False,
     ) -> Dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             fallback_action = action or "看着镜头微笑"
@@ -2216,6 +2219,7 @@ class OmniDrawPlugin(Star):
                     kwargs["aspect_ratio"] = aspect_ratio
                 if size:
                     kwargs["size"] = size
+                kwargs["pose"] = bool(pose)  # 姿势参考标志（bool 参数）
                 kwargs.update(extra_param_kwargs)
                 prompts.append(final_prompt)
                 tasks.append(chain_manager.run_chain_with_metadata(chain_to_use, final_prompt, **kwargs))
@@ -3207,6 +3211,7 @@ class OmniDrawPlugin(Star):
         extra_params: str = "",
         return_result: bool = False,
         refs: str = "",
+        pose: bool = False,
     ) -> str:
         """
         以此 AI 助理的固定人设拍摄自拍。
@@ -3215,9 +3220,10 @@ class OmniDrawPlugin(Star):
             count (int): 需要生成的图片数量。默认为 1。
             aspect_ratio (string): 宽高比例，例如 1:1、3:4、9:16、16:9。
             size (string): 分辨率或尺寸参数，例如 1024x1024。
-            extra_params (string): 附加模型参数透传，格式为 --key value，可同时传多个。使用姿势参考图时必须传 "--pose true"；不使用姿势时传 "--pose false"。
+            extra_params (string): 附加模型参数透传，格式为 --key value，可同时传多个。
             return_result (bool): 仅供其他插件显式调用时使用。为 true 时不自动下发图片，而是返回 JSON 图片结果。
             refs (string): 仅在 return_result 为 true 时使用。自拍参考图 URL、本地路径或 data URL；多个参考图可用换行分隔，也可传 JSON 数组字符串。
+            pose (bool): 是否选择图片作为姿势参考。为 True 时参考图为姿势参考，False 时为图像重绘。
         """
         event = self._unwrap_message_event(event)
         permission_error = self._permission_denied_message(event)
@@ -3250,6 +3256,7 @@ class OmniDrawPlugin(Star):
                 size=size,
                 extra_params=extra_params,
                 refs=refs or self._get_event_images(event),
+                pose=pose,
             )
             valid_results = [result for result in generation["results"] if self._get_image_result_url(result)]
             if not valid_results:
@@ -3287,6 +3294,7 @@ class OmniDrawPlugin(Star):
         extra_params: str = "",
         return_result: bool = False,
         refs: str = "",
+        pose: bool = False,
     ) -> str:
         """
         AI 画图工具。当用户提出明确的画面要求你画出来时调用此工具。
@@ -3295,9 +3303,10 @@ class OmniDrawPlugin(Star):
             count (int): 图片数量。默认为 1。
             aspect_ratio (string): 宽高比例，例如 1:1、3:4、9:16、16:9。
             size (string): 分辨率或尺寸参数，例如 1024x1024。
-            extra_params (string): 其他模型参数透传，格式为 --key value，可同时传多个。使用姿势参考图时必须传 "--pose true"；不使用姿势时传 "--pose false"。
+            extra_params (string): 其他模型参数透传，格式为 --key value，可同时传多个。
             return_result (bool): 仅供其他插件显式调用时使用。为 true 时不自动下发图片，而是返回 JSON 图片结果。
             refs (string): 仅在 return_result 为 true 时使用。参考图 URL、本地路径或 data URL；多个参考图可用换行分隔，也可传 JSON 数组字符串。
+            pose (bool): 是否选择图片作为姿势参考。为 True 时参考图为姿势参考，False 时为图像重绘。
         """
         event = self._unwrap_message_event(event)
         permission_error = self._permission_denied_message(event)
@@ -3329,6 +3338,7 @@ class OmniDrawPlugin(Star):
                 size=size,
                 extra_params=extra_params,
                 refs=refs or self._get_event_images(event),
+                pose=pose,
             )
             valid_results = [result for result in generation["results"] if self._get_image_result_url(result)]
             if not valid_results:
