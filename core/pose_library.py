@@ -200,7 +200,13 @@ class PoseLibrary:
                         logger.warning(f"[OmniDraw] 图源 API 返回 {resp.status}")
                         return []
                     data = await resp.json()
-            posts = data.get("post") if isinstance(data, dict) else None
+            # rule34 带认证时直接返回数组 [{...}]；gelbooru 返回 {"post": [...]}
+            if isinstance(data, list):
+                posts = data
+            elif isinstance(data, dict):
+                posts = data.get("post")
+            else:
+                posts = None
             if not isinstance(posts, list):
                 return []
             # 过滤: 非动画、非视频、尺寸、评分

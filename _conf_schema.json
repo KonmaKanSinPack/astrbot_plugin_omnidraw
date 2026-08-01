@@ -479,6 +479,12 @@
         "type": "text",
         "hint": "图源选 rule34 时填写。与 user_id 配套使用，获取地址同上。",
         "default": ""
+      },
+      "quality_provider": {
+        "description": "质检/翻译使用的 Provider 节点 ID",
+        "type": "string",
+        "hint": "填写 providers 中支持 vision 的节点 ID（如 node_1），用于姿势图质检和 tag 翻译。留空使用副脑链路（optimizer_config.chain_optimizer）。",
+        "default": ""
       }
     }
   },

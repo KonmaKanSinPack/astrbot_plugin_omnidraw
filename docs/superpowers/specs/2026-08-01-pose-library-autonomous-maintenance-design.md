@@ -23,17 +23,40 @@
 
 | 字段 | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `enable_pose_library` | bool | true | 总开关 |
+| `enable` | bool | true | 总开关 |
 | `source` | string | "gelbooru" | 图源切换开关: `gelbooru` / `rule34`（options） |
 | `enable_quality_check` | bool | true | vision LLM 质量把关开关 |
 | `max_download_per_search` | int | 5 | 每次搜索下载上限 |
+| `api_user_id` | string | "" | rule34 API user_id（账户选项页获取） |
+| `api_key` | string | "" | rule34 API key |
+| `quality_provider` | string | "" | 质检/翻译使用的 Provider 节点 ID；留空跟随副脑链路 |
+
+> 更新记录（2026-08-01）: 新增 `api_user_id`/`api_key`（rule34 认证）与 `quality_provider`（质检模型可配置）。
 
 ## 图源 API（均免费公开、JSON 输出）
 
 - Gelbooru: `https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&tags={tags}&limit={n}`
 - Rule34: `https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&json=1&tags={tags}&limit={n}`
+  - 需带认证参数 `user_id` + `api_key`（账户选项页 https://rule34.xxx/index.php?page=account&s=options 获取）
 
-返回 `post[]`，每项含 `file_url`、`tags`、`score` 等。过滤条件：`score:>=25`、非动画/视频（排除 `swf`）、限制尺寸 ≥ 500px。
+**返回格式差异（实现中确认）**：
+- Gelbooru: `{"post": [...]}`（字典包裹）
+- Rule34 带认证: 直接返回数组 `[{...}]`
+- 解析逻辑必须同时兼容两种格式：
+```python
+data = await resp.json()
+# rule34 带认证时直接返回数组 [{...}]；gelbooru 返回 {"post": [...]}
+if isinstance(data, list):
+    posts = data
+elif isinstance(data, dict):
+    posts = data.get("post")
+else:
+    posts = None
+if not isinstance(posts, list):
+    return []
+```
+
+每项含 `file_url`、`tags`、`score` 等。过滤条件：`score:>=25`、非动画/视频（排除 `swf`）、限制尺寸 ≥ 500px。
 
 ## 模块设计
 
@@ -64,6 +87,23 @@ class PoseLibrary:
         # 6. 入库: 图片保存到 images/，索引追加条目并写回 index.json
         # 7. 返回 [{id, file, tags, source_url, description}]
 ```
+
+### `main.py` — LLM 调用封装（质检可配置 provider）
+
+```python
+async def _call_chat_llm(self, messages, max_tokens=300, provider_id=""):
+    """provider_id 指定时用指定 Provider 节点；留空用副脑（optimizer）链路。"""
+    provider = None
+    if provider_id:
+        provider = self.plugin_config.get_provider(provider_id)
+    if provider is None:
+        chain = self.plugin_config.chains.get("optimizer", [])
+        provider = ...
+    # → build_chat_completions_endpoint → POST → choices[0].message.content
+```
+
+质检（`_check_pose_image`）与 tag 翻译（`_translate_pose_tags`）调用时传入
+`provider_id=self.plugin_config.pose_library.quality_provider`，用户可在配置页选择质检模型。
 
 ### `main.py` — 两个新 LLM 工具
 

@@ -48,6 +48,7 @@ class PoseLibraryConfig:
     max_download_per_search: int = 5
     api_user_id: str = ""             # rule34 API user_id（账户选项页获取）
     api_key: str = ""                 # rule34 API key
+    quality_provider: str = ""        # 质检/翻译使用的 Provider 节点 ID，留空跟随副脑
 
 
 @dataclass
@@ -254,6 +255,7 @@ class PluginConfig:
         )
         pose_lib_conf["api_user_id"] = str(pose_lib_conf.get("api_user_id", "")).strip()
         pose_lib_conf["api_key"] = str(pose_lib_conf.get("api_key", "")).strip()
+        pose_lib_conf["quality_provider"] = str(pose_lib_conf.get("quality_provider", "")).strip()
 
         return cls(
             providers=providers,
@@ -304,6 +306,7 @@ class PluginConfig:
                 ),
                 api_user_id=str(pose_lib_conf.get("api_user_id", "")).strip(),
                 api_key=str(pose_lib_conf.get("api_key", "")).strip(),
+                quality_provider=str(pose_lib_conf.get("quality_provider", "")).strip(),
             ),
         )
 

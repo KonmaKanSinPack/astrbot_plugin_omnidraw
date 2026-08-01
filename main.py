@@ -3063,13 +3063,20 @@ class OmniDrawPlugin(Star):
             logger.warning(f"[OmniDraw] 图片描述失败: {e}")
             return ""
 
-    async def _call_chat_llm(self, messages: list, max_tokens: int = 300) -> str:
-        """调用副脑 provider 的 chat/completions，返回 content 文本。失败返回空串。"""
+    async def _call_chat_llm(self, messages: list, max_tokens: int = 300,
+                             provider_id: str = "") -> str:
+        """调用 chat/completions，返回 content 文本。失败返回空串。
+
+        provider_id 指定时用指定 Provider 节点；留空用副脑（optimizer）链路。
+        """
         provider = None
-        chain = self.plugin_config.chains.get("optimizer", [])
-        provider = self.plugin_config.get_provider(chain[0]) if chain else (
-            self.plugin_config.providers[0] if self.plugin_config.providers else None
-        )
+        if provider_id:
+            provider = self.plugin_config.get_provider(provider_id)
+        if provider is None:
+            chain = self.plugin_config.chains.get("optimizer", [])
+            provider = self.plugin_config.get_provider(chain[0]) if chain else (
+                self.plugin_config.providers[0] if self.plugin_config.providers else None
+            )
         if not provider or not provider.base_url:
             return ""
 
@@ -3110,7 +3117,10 @@ class OmniDrawPlugin(Star):
             "只输出标签本身，逗号分隔，不要任何解释。\n"
             f"描述: {description}"
         )
-        content = await self._call_chat_llm([{"role": "user", "content": prompt}], max_tokens=200)
+        content = await self._call_chat_llm(
+            [{"role": "user", "content": prompt}], max_tokens=200,
+            provider_id=self.plugin_config.pose_library.quality_provider,
+        )
         # 清洗: 去掉多余符号，保留下划线/字母/空格/逗号
         import re as _re
         cleaned = _re.sub(r"[^\w\s,_-]", "", str(content or "")).strip()
@@ -3144,7 +3154,10 @@ class OmniDrawPlugin(Star):
                 {"type": "image_url", "image_url": {"url": data_url}}
             ]
         }]
-        content = await self._call_chat_llm(messages, max_tokens=50)
+        content = await self._call_chat_llm(
+            messages, max_tokens=50,
+            provider_id=self.plugin_config.pose_library.quality_provider,
+        )
         return "YES" in str(content).upper()
 
     @llm_tool(name="generate_selfie")
@@ -3386,7 +3399,7 @@ class OmniDrawPlugin(Star):
         """搜索并下载姿势参考图入库。当需要特定姿势（尤其双人互动）且 query_pose_library 无结果时调用。
 
         Args:
-            description (string): 姿势描述，如 "双人公主抱，女生搂住男生脖子"。
+            description (string): 姿势描述，booru标签格式。如 "vaginal_penetration"。
             count (int): 下载入库的图片数量，默认 5，最多 10。
         """
         event = self._unwrap_message_event(event)
