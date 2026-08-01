@@ -3149,22 +3149,36 @@ class OmniDrawPlugin(Star):
             return ""
 
     async def _translate_pose_tags(self, description: str) -> str:
-        """把中文姿势描述翻译成英文动漫 tag（最多 2 个，空格分隔 AND）。
+        """把中文姿势描述翻译成英文动漫 tag（最多 2 个，booru 标签格式）。
 
-        rule34 API 实测: 1-2 个 tag（空格分隔 AND）正常返回；
-        3 个及以上 tag 会被 API 拒绝（返回空响应）。因此必须限制数量。
+        rule34 API 实测: 1-2 个 tag（空格分隔 AND）正常；3+ tag 被拒。
+        booru 标签必须是小写下划线连接（如 princess_carry、vaginal_penetration），
+        不能用空格短语（如 bridal carry），否则搜索不到结果。
         """
         prompt = (
-            "将以下姿势描述翻译成 1-2 个最核心的英文动漫标签"
-            "（danbooru 风格，使用下划线连接短语），"
-            "只输出标签本身，空格分隔，不要任何解释或多余内容。\n"
+            "将以下姿势描述翻译成 1-2 个最核心的英文动漫标签。\n"
+            "要求：\n"
+            "1. 必须是 booru 标签格式：小写、单词间用下划线连接"
+            "（如 princess_carry、vaginal_penetration、1girl）\n"
+            "2. 多个标签用逗号分隔\n"
+            "3. 只输出标签本身，不要任何解释或多余内容\n"
             f"描述: {description}"
         )
         content = await self._judge_llm(prompt)
-        # 清洗: 逗号转空格（兼容 LLM 输出逗号分隔），去掉多余符号
+        if not content:
+            return str(description).strip().replace(" ", "_")[:200]
+        # 按逗号切分（兼容 LLM 输出空格分隔），每个标签: 小写 + 空格转下划线
         import re as _re
-        cleaned = _re.sub(r"[^\w\s_-]", " ", str(content or ""))
-        tags = [tag for tag in cleaned.split() if tag][:2]  # rule34 最多 2 个 tag
+        raw_parts = _re.split(r"[,，]", str(content))
+        tags = []
+        for part in raw_parts:
+            tag = _re.sub(r"[^\w\s_-]", "", part).strip().lower()
+            if not tag:
+                continue
+            tag = tag.replace(" ", "_")
+            if tag not in tags:
+                tags.append(tag)
+        tags = tags[:2]  # rule34 最多 2 个 tag
         if tags:
             return " ".join(tags)
         return str(description).strip().replace(" ", "_")[:200]
@@ -3400,7 +3414,7 @@ class OmniDrawPlugin(Star):
         """查询本地姿势参考图库。画图前先调用此工具寻找已有姿势图，找到后把返回的 file 路径作为 refs 传给 generate_image。
 
         Args:
-            keyword (string): 姿势关键词，如 "公主抱"、"双人拥抱"、"princess carry"、"牵手"。
+            keyword (string): 姿势关键词,booru标签格式，如 "公主抱"、"双人拥抱"、"princess carry"、"牵手"。
         """
         event = self._unwrap_message_event(event)
         permission_error = self._permission_denied_message(event)

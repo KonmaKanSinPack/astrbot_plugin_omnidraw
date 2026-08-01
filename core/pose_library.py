@@ -178,14 +178,18 @@ class PoseLibrary:
         """调用图源 API 搜索，返回 post 列表。图源由配置 source 切换。
 
         rule34 需带 user_id + api_key（账户选项页获取）；未配置时匿名请求。
+        在 tag 后追加 meta 过滤语法 score:>=N，让服务端直接只返回高分图。
         """
         base_url = RULE34_API if str(self._config.source).lower() == "rule34" else GELBOORU_API
+        # 追加 rule34/gelbooru 通用 meta 过滤: score:>=SCORE_FLOOR
+        # 如 "doggystyle" → "doggystyle score:>=25"
+        search_tags = f"{tags} score:>={SCORE_FLOOR}" if tags else f"score:>={SCORE_FLOOR}"
         params = {
             "page": "dapi",
             "s": "post",
             "q": "index",
             "json": "1",
-            "tags": tags,
+            "tags": search_tags,
             "limit": limit,
         }
         # rule34 API key 认证

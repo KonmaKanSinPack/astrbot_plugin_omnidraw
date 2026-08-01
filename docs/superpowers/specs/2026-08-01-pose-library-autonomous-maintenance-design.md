@@ -62,7 +62,9 @@ if not isinstance(posts, list):
     return []
 ```
 
-每项含 `file_url`、`tags`、`score` 等。过滤条件：`score:>=25`、非动画/视频（排除 `swf`）、限制尺寸 ≥ 500px。
+每项含 `file_url`、`tags`、`score` 等。过滤条件：
+- 搜索 tag 后**追加 meta 语法 `score:>=25`**（服务端直接只返回高分图），如 `doggystyle score:>=25`
+- 客户端再过滤：非动画/视频（排除 `swf`）、限制尺寸 ≥ 500px
 
 ## 模块设计
 
@@ -188,26 +190,40 @@ class PoseLibraryConfig:
 
 ## 关键实现细节
 
-1. **tag 翻译**：用 AstrBot provider 的 LLM（`_judge_llm`），prompt 要求输出 **1-2 个**英文 danbooru tag，**空格分隔**；后处理把逗号转空格、截断到最多 2 个（rule34 API 限制）；失败降级用英文原词。
+1. **tag 翻译**：用 AstrBot provider 的 LLM（`_judge_llm`），要求输出 **1-2 个、booru 标签格式**（小写下划线连接，如 `princess_carry`、`vaginal_penetration`）、逗号分隔；后处理按逗号切分、每个标签小写 + 空格转下划线、截断到最多 2 个（rule34 API 限制）；失败降级用英文原词。
 
 ```python
 async def _translate_pose_tags(self, description: str) -> str:
-    """把中文姿势描述翻译成英文动漫 tag（最多 2 个，空格分隔 AND）。
+    """把中文姿势描述翻译成英文动漫 tag（最多 2 个，booru 标签格式）。
 
-    rule34 API 实测: 1-2 个 tag（空格分隔 AND）正常返回；
-    3 个及以上 tag 会被 API 拒绝（返回空响应）。因此必须限制数量。
+    rule34 API 实测: 1-2 个 tag（空格分隔 AND）正常；3+ tag 被拒。
+    booru 标签必须是小写下划线连接（如 princess_carry、vaginal_penetration），
+    不能用空格短语（如 bridal carry），否则搜索不到结果。
     """
     prompt = (
-        "将以下姿势描述翻译成 1-2 个最核心的英文动漫标签"
-        "（danbooru 风格，使用下划线连接短语），"
-        "只输出标签本身，空格分隔，不要任何解释或多余内容。\n"
+        "将以下姿势描述翻译成 1-2 个最核心的英文动漫标签。\n"
+        "要求：\n"
+        "1. 必须是 booru 标签格式：小写、单词间用下划线连接"
+        "（如 princess_carry、vaginal_penetration、1girl）\n"
+        "2. 多个标签用逗号分隔\n"
+        "3. 只输出标签本身，不要任何解释或多余内容\n"
         f"描述: {description}"
     )
     content = await self._judge_llm(prompt)
-    # 清洗: 逗号转空格（兼容 LLM 输出逗号分隔），去掉多余符号
+    if not content:
+        return str(description).strip().replace(" ", "_")[:200]
+    # 按逗号切分（兼容 LLM 输出空格分隔），每个标签: 小写 + 空格转下划线
     import re as _re
-    cleaned = _re.sub(r"[^\w\s_-]", " ", str(content or ""))
-    tags = [tag for tag in cleaned.split() if tag][:2]  # rule34 最多 2 个 tag
+    raw_parts = _re.split(r"[,，]", str(content))
+    tags = []
+    for part in raw_parts:
+        tag = _re.sub(r"[^\w\s_-]", "", part).strip().lower()
+        if not tag:
+            continue
+        tag = tag.replace(" ", "_")
+        if tag not in tags:
+            tags.append(tag)
+    tags = tags[:2]  # rule34 最多 2 个 tag
     if tags:
         return " ".join(tags)
     return str(description).strip().replace(" ", "_")[:200]
