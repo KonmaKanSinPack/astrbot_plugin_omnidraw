@@ -43,6 +43,10 @@
 - Gelbooru: `{"post": [...]}`（字典包裹）
 - Rule34 带认证: 直接返回数组 `[{...}]`
 - 解析逻辑必须同时兼容两种格式：
+
+**Rule34 tag 搜索语法（实测确认）**：
+- 多个 tag 用**空格分隔（AND 逻辑）**；**逗号分隔会导致 API 拒绝**（返回空响应）
+- 因此翻译逻辑必须输出**空格分隔**的 tag 串（见下方 tag 翻译核心代码）
 ```python
 data = await resp.json()
 # rule34 带认证时直接返回数组 [{...}]；gelbooru 返回 {"post": [...]}
@@ -182,7 +186,26 @@ class PoseLibraryConfig:
 
 ## 关键实现细节
 
-1. **tag 翻译**：用副脑 provider 的 LLM，prompt 要求输出逗号分隔的英文 danbooru tag；失败降级用英文原词。
+1. **tag 翻译**：用 AstrBot provider 的 LLM（`_judge_llm`），prompt 要求输出 3-8 个英文 danbooru tag，**空格分隔**（rule34 用空格分隔 AND）；后处理把逗号转空格兜底；失败降级用英文原词。
+
+```python
+async def _translate_pose_tags(self, description: str) -> str:
+    """把中文姿势描述翻译成英文动漫 tag 列表（空格分隔 AND）。"""
+    prompt = (
+        "将以下姿势描述翻译成 3-8 个英文动漫标签"
+        "（danbooru 风格，使用下划线连接短语），"
+        "只输出标签本身，空格分隔，不要任何解释。\n"
+        f"描述: {description}"
+    )
+    content = await self._judge_llm(prompt)
+    # 清洗: 逗号转空格（兼容 LLM 输出逗号分隔），去掉多余符号
+    import re as _re
+    cleaned = _re.sub(r"[^\w\s_-]", " ", str(content or ""))
+    tags = [tag for tag in cleaned.split() if tag]
+    if tags:
+        return " ".join(tags)
+    return str(description).strip().replace(" ", "_")[:200]
+```
 2. **质量把关 prompt**：`"这是一张动漫图片。它是否包含清晰、完整、无遮挡过多的人体姿势（适合作为姿势参考图）？仅回答 YES 或 NO。"` — 返回含 YES 的保留。
 3. **下载复用**：用 aiohttp 下载，失败重试 2 次，跳过损坏图（PIL 无法打开）。
 4. **索引持久化**：每次入库写回 index.json（原子写: tmp + os.replace）。

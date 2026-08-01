@@ -3149,17 +3149,21 @@ class OmniDrawPlugin(Star):
             return ""
 
     async def _translate_pose_tags(self, description: str) -> str:
-        """把中文姿势描述翻译成英文动漫 tag 列表（逗号分隔）。"""
+        """把中文姿势描述翻译成英文动漫 tag 列表（空格分隔 AND）。"""
         prompt = (
-            "将以下姿势描述翻译成 3-8 个英文动漫标签（danbooru 风格，使用下划线连接短语），"
-            "只输出标签本身，逗号分隔，不要任何解释。\n"
+            "将以下姿势描述翻译成 3-8 个英文动漫标签"
+            "（danbooru 风格，使用下划线连接短语），"
+            "只输出标签本身，空格分隔，不要任何解释。\n"
             f"描述: {description}"
         )
         content = await self._judge_llm(prompt)
-        # 清洗: 去掉多余符号，保留下划线/字母/空格/逗号
+        # 清洗: 逗号转空格（兼容 LLM 输出逗号分隔），去掉多余符号
         import re as _re
-        cleaned = _re.sub(r"[^\w\s,_-]", "", str(content or "")).strip()
-        return cleaned if cleaned else str(description).strip().replace(" ", "_")[:200]
+        cleaned = _re.sub(r"[^\w\s_-]", " ", str(content or ""))
+        tags = [tag for tag in cleaned.split() if tag]
+        if tags:
+            return " ".join(tags)
+        return str(description).strip().replace(" ", "_")[:200]
 
     async def _check_pose_image(self, image_url: str) -> bool:
         """vision LLM 判断图片是否适合作为姿势参考图（清晰完整人体姿势）。"""
