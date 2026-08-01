@@ -57,6 +57,7 @@ from .constants import (
 from .core.chain_manager import ChainManager, ChainRunResult
 from .core.parser import CommandParser
 from .core.persona_manager import PersonaManager
+from .core.pose_library import PoseLibrary
 from .core.prompt_optimizer import PromptOptimizer
 from .core.video_manager import VideoManager
 from .models import PLUGIN_AUTHOR, PLUGIN_NAME, PLUGIN_VERSION, PluginConfig
@@ -569,6 +570,7 @@ class OmniDrawPlugin(Star):
         self.persona_manager = PersonaManager(self.plugin_config)
         self.video_manager = VideoManager(self.plugin_config)
         self.prompt_optimizer = PromptOptimizer(self.plugin_config, self.context)
+        self.pose_library = PoseLibrary(self.plugin_config.pose_library, self.data_dir)
         self._restart_cache_cleanup_task()
         self._prune_cache_if_needed("config_reload")
 
@@ -3060,6 +3062,90 @@ class OmniDrawPlugin(Star):
             logger.warning(f"[OmniDraw] 图片描述失败: {e}")
             return ""
 
+    async def _call_chat_llm(self, messages: list, max_tokens: int = 300) -> str:
+        """调用副脑 provider 的 chat/completions，返回 content 文本。失败返回空串。"""
+        provider = None
+        chain = self.plugin_config.chains.get("optimizer", [])
+        provider = self.plugin_config.get_provider(chain[0]) if chain else (
+            self.plugin_config.providers[0] if self.plugin_config.providers else None
+        )
+        if not provider or not provider.base_url:
+            return ""
+
+        from .providers.base import build_chat_completions_endpoint, next_api_key
+
+        endpoint = build_chat_completions_endpoint(provider.base_url)
+        api_key = next_api_key(provider.id, provider.api_keys)
+        if not endpoint or not api_key:
+            return ""
+
+        payload = {
+            "model": self.plugin_config.optimizer_model or provider.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.5,
+        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+        try:
+            import aiohttp as _aiohttp
+            timeout = _aiohttp.ClientTimeout(total=30)
+            async with _aiohttp.ClientSession() as _sess:
+                async with _sess.post(endpoint, headers=headers, json=payload, timeout=timeout) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"[OmniDraw] LLM 调用 API 返回 {resp.status}")
+                        return ""
+                    data = await resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    return str(content).strip()
+        except Exception as e:
+            logger.warning(f"[OmniDraw] LLM 调用失败: {e}")
+            return ""
+
+    async def _translate_pose_tags(self, description: str) -> str:
+        """把中文姿势描述翻译成英文动漫 tag 列表（逗号分隔）。"""
+        prompt = (
+            "将以下姿势描述翻译成 3-8 个英文动漫标签（danbooru 风格，使用下划线连接短语），"
+            "只输出标签本身，逗号分隔，不要任何解释。\n"
+            f"描述: {description}"
+        )
+        content = await self._call_chat_llm([{"role": "user", "content": prompt}], max_tokens=200)
+        # 清洗: 去掉多余符号，保留下划线/字母/空格/逗号
+        import re as _re
+        cleaned = _re.sub(r"[^\w\s,_-]", "", str(content or "")).strip()
+        return cleaned if cleaned else str(description).strip().replace(" ", "_")[:200]
+
+    async def _check_pose_image(self, image_url: str) -> bool:
+        """vision LLM 判断图片是否适合作为姿势参考图（清晰完整人体姿势）。"""
+        data_url = image_url
+        if not image_url.startswith("data:"):
+            try:
+                from .providers.base import guess_image_content_type
+                import aiohttp as _aiohttp
+                import base64 as _base64
+                async with _aiohttp.ClientSession() as _sess:
+                    async with _sess.get(image_url, timeout=_aiohttp.ClientTimeout(total=15)) as _resp:
+                        if _resp.status == 200:
+                            _bytes = await _resp.read()
+                            _mime = guess_image_content_type(image_url)
+                            _b64 = _base64.b64encode(_bytes).decode()
+                            data_url = f"data:{_mime};base64,{_b64}"
+            except Exception:
+                pass
+
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": (
+                    "这是一张动漫图片。它是否包含清晰、完整、无遮挡过多的人体姿势"
+                    "（适合作为姿势参考图）？仅回答 YES 或 NO。"
+                )},
+                {"type": "image_url", "image_url": {"url": data_url}}
+            ]
+        }]
+        content = await self._call_chat_llm(messages, max_tokens=50)
+        return "YES" in str(content).upper()
+
     @llm_tool(name="generate_selfie")
     async def tool_generate_selfie(
         self,
@@ -3272,3 +3358,54 @@ class OmniDrawPlugin(Star):
         except Exception as exc:
             logger.error(f"[OmniDraw] LLM 视频工具失败: {exc}", exc_info=True)
             return f"系统提示：失败 ({exc})。"
+
+    @llm_tool(name="query_pose_library")
+    async def tool_query_pose_library(self, event: AstrMessageEvent, keyword: str) -> str:
+        """查询本地姿势参考图库。画图前先调用此工具寻找已有姿势图，找到后把返回的 file 路径作为 refs 传给 generate_image。
+
+        Args:
+            keyword (string): 姿势关键词，如 "公主抱"、"双人拥抱"、"princess carry"、"牵手"。
+        """
+        event = self._unwrap_message_event(event)
+        permission_error = self._permission_denied_message(event)
+        if permission_error:
+            return permission_error
+
+        entries = await self.pose_library.query(keyword)
+        if not entries:
+            return f"姿势库中未找到与「{keyword}」匹配的姿势。可调用 search_pose_image 搜索并下载入库。"
+        lines = [f"姿势图 {i + 1}: {e['file']}" for i, e in enumerate(entries)]
+        return (
+            "姿势库匹配结果：\n" + "\n".join(lines)
+            + "\n可将其中一个 file 路径作为 refs 参数传给 generate_image 使用。"
+        )
+
+    @llm_tool(name="search_pose_image")
+    async def tool_search_pose_image(self, event: AstrMessageEvent, description: str, count: int = 5) -> str:
+        """搜索并下载姿势参考图入库。当需要特定姿势（尤其双人互动）且 query_pose_library 无结果时调用。
+
+        Args:
+            description (string): 姿势描述，如 "双人公主抱，女生搂住男生脖子"。
+            count (int): 下载入库的图片数量，默认 5，最多 10。
+        """
+        event = self._unwrap_message_event(event)
+        permission_error = self._permission_denied_message(event)
+        if permission_error:
+            return permission_error
+
+        entries = await self.pose_library.search_and_download(
+            description,
+            count,
+            translate_cb=self._translate_pose_tags,
+            quality_cb=self._check_pose_image,
+        )
+        if not entries:
+            return f"未找到合适的「{description}」姿势图，请换一种描述重试。"
+        lines = [
+            f"姿势图 {i + 1}: {e['file']} (tags: {e['tags'][:80]})"
+            for i, e in enumerate(entries)
+        ]
+        return (
+            "已入库姿势图：\n" + "\n".join(lines)
+            + "\n可将其中一个 file 路径作为 refs 参数传给 generate_image 使用。"
+        )

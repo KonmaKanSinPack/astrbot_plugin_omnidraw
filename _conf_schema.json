@@ -125,6 +125,12 @@
         "type": "text",
         "hint": "支持占位符：{command}、{error}、{error_type}、{persona_name}。",
         "default": "💥 自拍生成失败: {error}"
+      },
+      "describe_generated_image": {
+        "description": "LLM 工具返回图像描述（需 vision 模型）",
+        "type": "bool",
+        "hint": "开启后，LLM 调用 generate_image / generate_selfie 生图成功时会额外调一次 vision 模型描述图像内容并返回描述文字。需要副脑 provider 配置的模型支持 vision。",
+        "default": false
       }
     }
   },
@@ -431,6 +437,38 @@
     "type": "list",
     "hint": "格式：预设名:底层提示词。例如 写真:daily smartphone portrait。",
     "default": []
+  },
+  "pose_library_config": {
+    "description": "姿势图库（LLM 自主维护）",
+    "type": "object",
+    "hint": "LLM 可通过 search_pose_image 工具搜索下载姿势参考图入库，供 ControlNet 画图使用；通过 query_pose_library 查询已有姿势。",
+    "items": {
+      "enable": {
+        "description": "启用姿势图库",
+        "type": "bool",
+        "hint": "关闭后 search_pose_image / query_pose_library 工具不可用。",
+        "default": true
+      },
+      "source": {
+        "description": "图源",
+        "type": "string",
+        "options": ["gelbooru", "rule34"],
+        "hint": "gelbooru 偏 SFW；rule34 包含 NSFW 内容，适合成人场景。",
+        "default": "gelbooru"
+      },
+      "enable_quality_check": {
+        "description": "启用 vision 质检",
+        "type": "bool",
+        "hint": "开启后下载的姿势图会经 vision 模型判断是否适合作为姿势参考图，不合格自动跳过。",
+        "default": true
+      },
+      "max_download_per_search": {
+        "description": "每次搜索下载上限",
+        "type": "int",
+        "hint": "单次 search_pose_image 最多下载入库的图片张数，1-10。",
+        "default": 5
+      }
+    }
   },
   "verbose_report": {
     "description": "输出详细调试日志",

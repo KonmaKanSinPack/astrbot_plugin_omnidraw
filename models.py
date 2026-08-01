@@ -41,6 +41,14 @@ class ProviderConfig:
 
 
 @dataclass
+class PoseLibraryConfig:
+    enable: bool = True
+    source: str = "gelbooru"          # gelbooru / rule34
+    enable_quality_check: bool = True
+    max_download_per_search: int = 5
+
+
+@dataclass
 class PersonaProfile:
     id: str
     name: str
@@ -97,6 +105,7 @@ class PluginConfig:
     show_generation_time: bool
     show_request_model: bool
     describe_generated_image: bool
+    pose_library: PoseLibraryConfig
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any], data_dir: str) -> "PluginConfig":
@@ -138,6 +147,7 @@ class PluginConfig:
         usage_conf = _ensure_dict(config_dict, "usage_config")
         cache_conf = _ensure_dict(config_dict, "cache_config")
         reply_conf = _ensure_dict(config_dict, "reply_config")
+        pose_lib_conf = _ensure_dict(config_dict, "pose_library_config")
 
         for legacy_key in ("persona_name", "persona_base_prompt", "persona_ref_image", "persona_ref_images"):
             if legacy_key in config_dict and legacy_key not in persona_conf:
@@ -232,7 +242,14 @@ class PluginConfig:
         reply_conf["selfie_pending_message"] = selfie_pending_message
         reply_conf["draw_error_message"] = draw_error_message
         reply_conf["selfie_error_message"] = selfie_error_message
-        reply_conf["describe_generated_image"] = _to_bool(reply_conf.get("describe_generated_image", True))
+        reply_conf["describe_generated_image"] = _to_bool(reply_conf.get("describe_generated_image", False))
+
+        pose_lib_conf["enable"] = _to_bool(pose_lib_conf.get("enable", True))
+        pose_lib_conf["source"] = str(pose_lib_conf.get("source", "gelbooru")).strip() or "gelbooru"
+        pose_lib_conf["enable_quality_check"] = _to_bool(pose_lib_conf.get("enable_quality_check", True))
+        pose_lib_conf["max_download_per_search"] = _to_int(
+            pose_lib_conf.get("max_download_per_search", 5), 5, minimum=1
+        )
 
         return cls(
             providers=providers,
@@ -273,7 +290,15 @@ class PluginConfig:
             verbose_report=_to_bool(config_dict.get("verbose_report", False)),
             show_generation_time=_to_bool(config_dict.get("show_generation_time", False)),
             show_request_model=_to_bool(config_dict.get("show_request_model", False)),
-            describe_generated_image=_to_bool(reply_conf.get("describe_generated_image", True)),
+            describe_generated_image=_to_bool(reply_conf.get("describe_generated_image", False)),
+            pose_library=PoseLibraryConfig(
+                enable=_to_bool(pose_lib_conf.get("enable", True)),
+                source=str(pose_lib_conf.get("source", "gelbooru")).strip() or "gelbooru",
+                enable_quality_check=_to_bool(pose_lib_conf.get("enable_quality_check", True)),
+                max_download_per_search=_to_int(
+                    pose_lib_conf.get("max_download_per_search", 5), 5, minimum=1
+                ),
+            ),
         )
 
     def get_provider(self, provider_id: str) -> Optional[ProviderConfig]:
