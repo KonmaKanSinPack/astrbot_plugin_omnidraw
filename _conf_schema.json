@@ -467,6 +467,18 @@
         "type": "int",
         "hint": "单次 search_pose_image 最多下载入库的图片张数，1-10。",
         "default": 5
+      },
+      "api_user_id": {
+        "description": "Rule34 API user_id",
+        "type": "text",
+        "hint": "图源选 rule34 时填写。在 https://rule34.xxx/index.php?page=account&s=options 账户选项页获取。留空则匿名请求（限制较严）。",
+        "default": ""
+      },
+      "api_key": {
+        "description": "Rule34 API Key",
+        "type": "text",
+        "hint": "图源选 rule34 时填写。与 user_id 配套使用，获取地址同上。",
+        "default": ""
       }
     }
   },

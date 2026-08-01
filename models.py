@@ -46,6 +46,8 @@ class PoseLibraryConfig:
     source: str = "gelbooru"          # gelbooru / rule34
     enable_quality_check: bool = True
     max_download_per_search: int = 5
+    api_user_id: str = ""             # rule34 API user_id（账户选项页获取）
+    api_key: str = ""                 # rule34 API key
 
 
 @dataclass
@@ -250,6 +252,8 @@ class PluginConfig:
         pose_lib_conf["max_download_per_search"] = _to_int(
             pose_lib_conf.get("max_download_per_search", 5), 5, minimum=1
         )
+        pose_lib_conf["api_user_id"] = str(pose_lib_conf.get("api_user_id", "")).strip()
+        pose_lib_conf["api_key"] = str(pose_lib_conf.get("api_key", "")).strip()
 
         return cls(
             providers=providers,
@@ -298,6 +302,8 @@ class PluginConfig:
                 max_download_per_search=_to_int(
                     pose_lib_conf.get("max_download_per_search", 5), 5, minimum=1
                 ),
+                api_user_id=str(pose_lib_conf.get("api_user_id", "")).strip(),
+                api_key=str(pose_lib_conf.get("api_key", "")).strip(),
             ),
         )
 

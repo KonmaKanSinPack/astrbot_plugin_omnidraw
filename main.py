@@ -3165,7 +3165,7 @@ class OmniDrawPlugin(Star):
             count (int): 需要生成的图片数量。默认为 1。
             aspect_ratio (string): 宽高比例，例如 1:1、3:4、9:16、16:9。
             size (string): 分辨率或尺寸参数，例如 1024x1024。
-            extra_params (string): 附加模型参数透传，格式为 --key value，可同时传多个。
+            extra_params (string): 附加模型参数透传，格式为 --key value，可同时传多个。使用姿势参考图时必须传 "--pose on"。
             return_result (bool): 仅供其他插件显式调用时使用。为 true 时不自动下发图片，而是返回 JSON 图片结果。
             refs (string): 仅在 return_result 为 true 时使用。自拍参考图 URL、本地路径或 data URL；多个参考图可用换行分隔，也可传 JSON 数组字符串。
         """
@@ -3244,7 +3244,7 @@ class OmniDrawPlugin(Star):
             count (int): 图片数量。默认为 1。
             aspect_ratio (string): 宽高比例，例如 1:1、3:4、9:16、16:9。
             size (string): 分辨率或尺寸参数，例如 1024x1024。
-            extra_params (string): 其他模型参数透传，格式为 --key value，可同时传多个。
+            extra_params (string): 其他模型参数透传，格式为 --key value，可同时传多个。使用姿势参考图时必须传 "--pose on"。
             return_result (bool): 仅供其他插件显式调用时使用。为 true 时不自动下发图片，而是返回 JSON 图片结果。
             refs (string): 仅在 return_result 为 true 时使用。参考图 URL、本地路径或 data URL；多个参考图可用换行分隔，也可传 JSON 数组字符串。
         """

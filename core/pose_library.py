@@ -174,7 +174,10 @@ class PoseLibrary:
         return str(description).strip().replace(" ", "_")[:200]
 
     async def _search_api(self, tags: str, limit: int) -> list[dict]:
-        """调用图源 API 搜索，返回 post 列表。图源由配置 source 切换。"""
+        """调用图源 API 搜索，返回 post 列表。图源由配置 source 切换。
+
+        rule34 需带 user_id + api_key（账户选项页获取）；未配置时匿名请求。
+        """
         base_url = RULE34_API if str(self._config.source).lower() == "rule34" else GELBOORU_API
         params = {
             "page": "dapi",
@@ -184,6 +187,11 @@ class PoseLibrary:
             "tags": tags,
             "limit": limit,
         }
+        # rule34 API key 认证
+        if str(self._config.source).lower() == "rule34":
+            if getattr(self._config, "api_user_id", "") and getattr(self._config, "api_key", ""):
+                params["user_id"] = str(self._config.api_user_id)
+                params["api_key"] = str(self._config.api_key)
         try:
             timeout = aiohttp.ClientTimeout(total=20)
             async with aiohttp.ClientSession(timeout=timeout) as session:
