@@ -84,7 +84,8 @@ class PoseLibrary:
 
         existing_urls = {e.get("source_url") for e in self._load_index()}
         entries = []
-        async with aiohttp.ClientSession() as session:
+        # trust_env=True: 走系统代理（rule34/gelbooru 为国外站点，本机直连超时）
+        async with aiohttp.ClientSession(trust_env=True) as session:
             for post in posts[:count]:
                 url = str(post.get("file_url") or "").strip()
                 if not url or url in existing_urls:
@@ -194,7 +195,8 @@ class PoseLibrary:
                 params["api_key"] = str(self._config.api_key)
         try:
             timeout = aiohttp.ClientTimeout(total=20)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            # trust_env=True: 走系统代理（rule34/gelbooru 为国外站点，本机直连超时）
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
                 async with session.get(base_url, params=params, headers=DOWNLOAD_HEADERS) as resp:
                     if resp.status != 200:
                         logger.warning(f"[OmniDraw] 图源 API 返回 {resp.status}")
