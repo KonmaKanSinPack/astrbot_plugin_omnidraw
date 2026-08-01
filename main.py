@@ -3149,18 +3149,22 @@ class OmniDrawPlugin(Star):
             return ""
 
     async def _translate_pose_tags(self, description: str) -> str:
-        """把中文姿势描述翻译成英文动漫 tag 列表（空格分隔 AND）。"""
+        """把中文姿势描述翻译成英文动漫 tag（最多 2 个，空格分隔 AND）。
+
+        rule34 API 实测: 1-2 个 tag（空格分隔 AND）正常返回；
+        3 个及以上 tag 会被 API 拒绝（返回空响应）。因此必须限制数量。
+        """
         prompt = (
-            "将以下姿势描述翻译成 3-8 个英文动漫标签"
+            "将以下姿势描述翻译成 1-2 个最核心的英文动漫标签"
             "（danbooru 风格，使用下划线连接短语），"
-            "只输出标签本身，空格分隔，不要任何解释。\n"
+            "只输出标签本身，空格分隔，不要任何解释或多余内容。\n"
             f"描述: {description}"
         )
         content = await self._judge_llm(prompt)
         # 清洗: 逗号转空格（兼容 LLM 输出逗号分隔），去掉多余符号
         import re as _re
         cleaned = _re.sub(r"[^\w\s_-]", " ", str(content or ""))
-        tags = [tag for tag in cleaned.split() if tag]
+        tags = [tag for tag in cleaned.split() if tag][:2]  # rule34 最多 2 个 tag
         if tags:
             return " ".join(tags)
         return str(description).strip().replace(" ", "_")[:200]
