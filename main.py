@@ -3249,6 +3249,7 @@ class OmniDrawPlugin(Star):
                 aspect_ratio=aspect_ratio,
                 size=size,
                 extra_params=extra_params,
+                refs=refs or self._get_event_images(event),
             )
             valid_results = [result for result in generation["results"] if self._get_image_result_url(result)]
             if not valid_results:
@@ -3327,6 +3328,7 @@ class OmniDrawPlugin(Star):
                 aspect_ratio=aspect_ratio,
                 size=size,
                 extra_params=extra_params,
+                refs=refs or self._get_event_images(event),
             )
             valid_results = [result for result in generation["results"] if self._get_image_result_url(result)]
             if not valid_results:
