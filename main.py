@@ -3445,9 +3445,9 @@ class OmniDrawPlugin(Star):
     @llm_tool(name="search_pose_image")
     async def tool_search_pose_image(self, event: AstrMessageEvent, description: str, count: int = 5) -> str:
         """搜索并下载姿势参考图入库。当需要特定姿势（尤其双人互动）且 query_pose_library 无结果时调用。
-
+            关键词必须为fanbooru格式，如 "vaginal_penetration"，多关键词之间空格隔开，同时不要超过2个，如"standing_sex leg_raised"。
         Args:
-            description (string): 姿势描述，booru标签格式。如 "vaginal_penetration"。
+            description (string): 姿势描述，booru标签格式。如 "vaginal_penetration"。同时关键词不要超过2个，如"standing_sex leg_raised"。
             count (int): 下载入库的图片数量，默认 5，最多 10。
         """
         event = self._unwrap_message_event(event)
