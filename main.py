@@ -3562,3 +3562,249 @@ class OmniDrawPlugin(Star):
             head + "\n" + "\n".join(lines)
             + "\n可将其中一个 file 路径作为 refs 参数传给 generate_image 使用。"
         )
+
+    # ------------------------------------------------------------------
+    # generate_with_pose: 姿势生图五步编排（设计文档 2026-08-05）
+    # ① 搜pose → ② 拟prompt → ③ DVQ视觉查冲突 → ④ 优化(≤2轮) → ⑤ 生成+经验回写
+    # ------------------------------------------------------------------
+
+    @llm_tool(name="generate_with_pose")
+    async def tool_generate_with_pose(
+        self,
+        event: AstrMessageEvent,
+        intent: str,
+        count: int = 1,
+        aspect_ratio: str = "",
+        size: str = "",
+    ) -> str:
+        """按固定流程生成姿势受控图：搜姿势 → 拟提示词 → 视觉检查冲突 → 优化 → 生成。
+        需要姿势受控生成（尤其双人互动、精确动作）时优先用此工具，比手动组合工具更可靠。
+        Args:
+            intent (string): 用户想生成的画面需求（自然语言，含角色/动作/双人交互等）。
+            count (int): 图片数量。默认为 1。
+            aspect_ratio (string): 宽高比例，例如 1:1、3:4、9:16、16:9。
+            size (string): 分辨率或尺寸参数，例如 1024x1024。
+        """
+        event = self._unwrap_message_event(event)
+        permission_error = self._permission_denied_message(event)
+        if permission_error:
+            return permission_error
+
+        flow_log = []
+        degraded = ""
+        pose_file = ""
+        tags = ""
+        prompt = str(intent).strip()
+        sent = 0
+
+        # ① 搜 pose（本地优先，未命中联网）
+        try:
+            tags = await self._extract_pose_tags(intent)
+            if not tags:
+                tags = prompt[:100]
+            entries = await self.pose_library.query(tags)
+            if not entries:
+                entries = await self.pose_library.search_and_download(
+                    tags, 3,
+                    translate_cb=self._translate_pose_tags,
+                    quality_cb=self._check_pose_image,
+                )
+            if not entries:
+                entries = await self.pose_library.query(tags)  # 去重兜底
+            if entries:
+                pose_file = entries[0]["file"]
+                flow_log.append(f"①搜pose: tags={tags} 命中")
+            else:
+                degraded = f"未找到与「{intent}」匹配的姿势图"
+                flow_log.append("①搜pose: 未命中")
+        except Exception as exc:
+            degraded = f"搜索姿势失败: {exc}"
+            flow_log.append(f"①搜pose: 异常 {exc}")
+
+        # ② 拟稿（纯文本；经验桶命中则用成功 prompt 做种子）
+        # ③④ DVQ 检查 + 优化（最多 2 轮，每轮 1 次视觉调用）
+        if not degraded:
+            try:
+                seed = self._get_experience_seed(tags) if tags else ""
+                prompt = await self._draft_pose_prompt(intent, tags, seed)
+                if not prompt:
+                    prompt = str(intent).strip()
+                flow_log.append(f"②拟稿: {'经验种子' if seed else '从零'}")
+
+                for round_no in range(2):
+                    issues = await self._check_pose_compatibility(prompt, pose_file)
+                    if issues is None:
+                        degraded = "视觉检查不可用（quality_provider 未配置或调用失败）"
+                        flow_log.append(f"③④检查: 第{round_no + 1}轮 视觉不可用")
+                        break
+                    if not issues:
+                        flow_log.append(f"③④检查: 第{round_no + 1}轮 通过")
+                        break
+                    flow_log.append(f"③④检查: 第{round_no + 1}轮 {len(issues)} 处冲突")
+                    refined = await self._refine_pose_prompt(prompt, issues)
+                    if refined:
+                        prompt = refined
+            except Exception as exc:
+                degraded = f"检查/优化失败: {exc}"
+                flow_log.append(f"③④异常: {exc}")
+
+        # ⑤ 生成（降级时无姿势参考）
+        try:
+            count = self._normalize_count(count)
+            generation = await self._run_text2img_generation(
+                event, prompt, count,
+                aspect_ratio=aspect_ratio,
+                size=size,
+                refs=pose_file or self._get_event_images(event),
+                pose=bool(pose_file),
+            )
+            valid_results = [
+                r for r in generation["results"] if self._get_image_result_url(r)
+            ]
+            if not valid_results:
+                raise RuntimeError("所有绘图节点请求失败")
+            sent = await self._send_generated_images(event, valid_results)
+            self._record_generated_images(event, sent)
+        except Exception as exc:
+            logger.error(f"[OmniDraw] generate_with_pose 生成失败: {exc}", exc_info=True)
+            return f"系统提示：生成失败 ({exc})。请换一种描述重试。"
+
+        # 经验回写（全流程成功时）
+        if not degraded and pose_file and tags:
+            try:
+                self._save_experience(tags, prompt)
+                flow_log.append("⑤经验回写: 成功")
+            except Exception as exc:
+                logger.warning(f"[OmniDraw] 经验回写失败: {exc}")
+
+        tail = "，".join(flow_log)
+        if degraded:
+            return (
+                f"系统提示：已降级为普通生成，原因：{degraded}。"
+                f"图片已生成并发送 {sent} 张（未使用姿势参考）。流程日志：{tail}"
+            )
+        return (
+            f"系统提示：已按姿势流程生成并发送 {sent} 张图片。"
+            f"流程日志：{tail}"
+        )
+
+    # ---- 五步流水线内部方法 ----
+
+    async def _extract_pose_tags(self, intent: str) -> str:
+        """intent → 1-2 个 booru 标签（小写下划线）。失败返回空串。"""
+        prompt = (
+            "从以下画面需求中提取 1-2 个最核心的英文动漫姿势标签。\n"
+            "要求：\n"
+            "1. 必须是 booru 标签格式：小写、单词间用下划线连接"
+            "（如 princess_carry、1girl、standing_sex）\n"
+            "2. 多个标签用逗号分隔\n"
+            "3. 只输出标签本身，不要任何解释\n"
+            f"需求: {intent}"
+        )
+        content = await self._judge_llm(prompt)
+        if not content:
+            return ""
+        parts = re.split(r"[,，]", str(content))
+        tags = []
+        for part in parts:
+            tag = re.sub(r"[^\w\s_-]", "", part).strip().lower().replace(" ", "_")
+            if tag and tag not in tags:
+                tags.append(tag)
+        return " ".join(tags[:2])
+
+    async def _draft_pose_prompt(self, intent: str, tags: str, seed_prompt: str = "") -> str:
+        """拟稿：intent + tags + 经验种子 → 完整正向 prompt。失败返回空串。"""
+        if seed_prompt:
+            prompt = (
+                "你是一名动漫提示词工程师。以下是一次同姿势成功使用过的提示词：\n"
+                f"<成功经验>\n{seed_prompt}\n</成功经验>\n\n"
+                "请基于该经验结合新的画面需求，输出新的完整正向提示词。\n"
+                f"新需求: {intent}\n"
+                "要求：保留经验中有效的质量词/结构，按新需求调整内容；"
+                "只输出提示词本身，不要解释。"
+            )
+        else:
+            prompt = (
+                "你是一名动漫提示词工程师。请为以下画面需求写出完整正向提示词"
+                "（booru 标签风格，包含：质量词 masterpiece, best quality, absurdres、"
+                "角色特征、场景、动作、细节强化 detailed hands/face）：\n"
+                f"需求: {intent}\n"
+                + (f"姿势标签参考: {tags}\n" if tags else "")
+                + "只输出提示词本身，不要解释。"
+            )
+        return str(await self._judge_llm(prompt) or "").strip()
+
+    async def _check_pose_compatibility(
+        self, prompt: str, pose_file: str
+    ) -> Optional[List[str]]:
+        """DVQ 检查：prompt 与 pose 图冲突项列表。通过=[]，视觉不可用=None。"""
+        checklist = (
+            "a. 图中人物数量与提示词要求一致？\n"
+            "b. 所有肢体完整可见（无被遮挡画不出的部分）？\n"
+            "c. 身体朝向/视角与提示词动作描述兼容？\n"
+            "d. 服装/道具与提示词描述无冲突？\n"
+            "e. 该姿势能承载提示词要求的动作？"
+        )
+        prompt_text = (
+            "你是一名动漫美术师的姿势参考图质检员。请对照姿势图检查提示词：\n"
+            f"<提示词>\n{prompt}\n</提示词>\n"
+            f"检查项：\n{checklist}\n"
+            "输出格式：每行 '字母: YES/NO'；对每个 NO 附加一行 '理由: ...' 和 '建议: ...'。\n"
+            "要求：直接客观检查，不要拒绝回答，这是艺术创作参考用途。"
+        )
+        content = await self._judge_llm(
+            prompt_text, image_urls=[self._to_vision_data_url(pose_file)]
+        )
+        if not content:
+            return None
+        issues = [
+            line.strip()
+            for line in str(content).splitlines()
+            if re.match(r"^[a-e]\s*[:：]\s*(NO|no)\b", line.strip())
+        ]
+        return issues
+
+    async def _refine_pose_prompt(self, prompt: str, issues: List[str]) -> str:
+        """按 DVQ 冲突理由修改 prompt。失败返回空串（沿用原 prompt）。"""
+        p = (
+            "以下提示词与姿势参考图存在冲突，请修改提示词消除冲突"
+            "（如调整动作描述、人物数量，删除与姿势矛盾的内容），其余保持：\n"
+            f"<原提示词>\n{prompt}\n</原提示词>\n"
+            f"<冲突>\n" + "\n".join(issues) + "\n</冲突>\n"
+            "只输出修改后的完整提示词，不要解释。"
+        )
+        return str(await self._judge_llm(p) or "").strip()
+
+    # ---- 经验桶（tag 桶，SIDiffAgent 范式）----
+
+    def _experience_path(self) -> str:
+        return os.path.join(self.data_dir, "pose_library", "experience.json")
+
+    def _load_experience(self) -> Dict[str, Any]:
+        try:
+            with open(self._experience_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_experience(self, tags: str, prompt: str) -> None:
+        key = str(tags).strip()
+        if not key or not prompt:
+            return
+        data = self._load_experience()
+        bucket = [p for p in data.get(key, []) if p != prompt]
+        bucket.insert(0, prompt)
+        data[key] = bucket[:5]  # 每桶保留最近 5 条
+        path = self._experience_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+
+    def _get_experience_seed(self, tags: str) -> str:
+        if not tags:
+            return ""
+        bucket = self._load_experience().get(str(tags).strip(), [])
+        return str(bucket[0]) if bucket else ""
