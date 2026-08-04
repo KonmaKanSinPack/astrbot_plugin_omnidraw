@@ -441,12 +441,12 @@
   "pose_library_config": {
     "description": "姿势图库（LLM 自主维护）",
     "type": "object",
-    "hint": "LLM 可通过 search_pose_image 工具搜索下载姿势参考图入库，供 ControlNet 画图使用；通过 query_pose_library 查询已有姿势。",
+    "hint": "LLM 可通过 search_pose_image 工具搜索姿势参考图（本地优先，未命中自动联网下载入库），供 ControlNet 画图使用。",
     "items": {
       "enable": {
         "description": "启用姿势图库",
         "type": "bool",
-        "hint": "关闭后 search_pose_image / query_pose_library 工具不可用。",
+        "hint": "关闭后 search_pose_image 工具不可用。",
         "default": true
       },
       "source": {

@@ -3489,27 +3489,6 @@ class OmniDrawPlugin(Star):
             logger.error(f"[OmniDraw] LLM 视频工具失败: {exc}", exc_info=True)
             return f"系统提示：失败 ({exc})。"
 
-    @llm_tool(name="query_pose_library")
-    async def tool_query_pose_library(self, event: AstrMessageEvent, keyword: str) -> str:
-        """查询本地姿势参考图库。画图前先调用此工具寻找已有姿势图，找到后把返回的 file 路径作为 refs 传给 generate_image。
-
-        Args:
-            keyword (string): 姿势关键词,booru标签格式，如 "公主抱"、"双人拥抱"、"princess carry"、"牵手"。
-        """
-        event = self._unwrap_message_event(event)
-        permission_error = self._permission_denied_message(event)
-        if permission_error:
-            return permission_error
-
-        entries = await self.pose_library.query(keyword)
-        if not entries:
-            return f"姿势库中未找到与「{keyword}」匹配的姿势。可调用 search_pose_image 搜索并下载入库。"
-        lines = [f"姿势图 {i + 1}: {e['file']}" for i, e in enumerate(entries)]
-        return (
-            "姿势库匹配结果：\n" + "\n".join(lines)
-            + "\n可将其中一个 file 路径作为 refs 参数传给 generate_image 使用。"
-        )
-
     @llm_tool(name="search_pose_image")
     async def tool_search_pose_image(
         self,
@@ -3519,11 +3498,11 @@ class OmniDrawPlugin(Star):
         describe: bool = False,
         describe_mode: str = "text",
     ) -> str:
-        """搜索并下载姿势参考图入库。当需要特定姿势（尤其双人互动）且 query_pose_library 无结果时调用。
+        """搜索姿势参考图（本地优先，未命中自动联网搜索下载入库）。需要特定姿势（尤其双人互动）时调用此工具即可。
             关键词必须为fanbooru格式，如 "vaginal_penetration"，多关键词之间空格隔开，同时不要超过2个，如"standing_sex leg_raised"。
         Args:
             description (string): 姿势描述，booru标签格式。如 "vaginal_penetration"。同时关键词不要超过2个，如"standing_sex leg_raised"。
-            count (int): 下载入库的图片数量，默认 5，最多 10。
+            count (int): 联网搜索时的下载入库数量，默认 5，最多 10（本地命中时忽略）。
             describe (bool): 是否返回图片内容供你判断（与 describe_mode 配合，默认不启用）。
             describe_mode (string): 仅 describe=true 时生效。'text'=用视觉提供商返回每张图的文字描述（默认）；
                 'image'=直接把图片本身（data URL）放进结果，由你直接看图判断，不再调用视觉描述。
@@ -3534,12 +3513,25 @@ class OmniDrawPlugin(Star):
         if permission_error:
             return permission_error
 
-        entries = await self.pose_library.search_and_download(
-            description,
-            count,
-            translate_cb=self._translate_pose_tags,
-            quality_cb=self._check_pose_image,
-        )
+        # ① 本地模糊匹配优先（快、免费）
+        entries = await self.pose_library.query(description)
+        head = "姿势库本地匹配："
+        if not entries:
+            # ② 本地未命中 → 联网搜索下载入库
+            entries = await self.pose_library.search_and_download(
+                description,
+                count,
+                translate_cb=self._translate_pose_tags,
+                quality_cb=self._check_pose_image,
+            )
+            head = "已入库姿势图："
+        if not entries:
+            # ③ 联网 0 新增：图源返回的帖子可能已全部在库里（去重跳过），
+            # 用翻译后的 tags 再查一次本地
+            existing = await self.pose_library.query(description)
+            if existing:
+                entries = existing
+                head = "姿势库已有匹配（本次搜索无新下载）："
         if not entries:
             return f"未找到合适的「{description}」姿势图，请换一种描述重试。"
         lines = [
@@ -3553,7 +3545,7 @@ class OmniDrawPlugin(Star):
                 for i, e in enumerate(entries):
                     img_lines.append(f"图片 {i + 1}: {self._to_vision_data_url(e['file'])}")
                 return (
-                    "已入库姿势图：\n" + "\n".join(lines)
+                    head + "\n" + "\n".join(lines)
                     + "\n" + "\n".join(img_lines)
                     + "\n直接查看图片内容，挑选最合适的姿势图，将其 file 路径作为 refs 参数传给 generate_image 使用。"
                 )
@@ -3562,11 +3554,11 @@ class OmniDrawPlugin(Star):
                 desc = await self._describe_pose_image(e["file"])
                 desc_lines.append(f"姿势图 {i + 1} 描述: {desc}")
             return (
-                "已入库姿势图：\n" + "\n".join(lines)
+                head + "\n" + "\n".join(lines)
                 + "\n" + "\n".join(desc_lines)
                 + "\n可根据描述挑选最合适的姿势图，将其 file 路径作为 refs 参数传给 generate_image 使用。"
             )
         return (
-            "已入库姿势图：\n" + "\n".join(lines)
+            head + "\n" + "\n".join(lines)
             + "\n可将其中一个 file 路径作为 refs 参数传给 generate_image 使用。"
         )
