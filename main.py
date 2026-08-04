@@ -3168,6 +3168,7 @@ class OmniDrawPlugin(Star):
         if provider is None or not hasattr(provider, "text_chat"):
             return ""
 
+        logger.info(f"查看provider:{provider}")
         try:
             llm_resp = await provider.text_chat(
                 prompt=prompt,
@@ -3634,6 +3635,7 @@ class OmniDrawPlugin(Star):
                 for round_no in range(2):
                     # 视觉失败返回空串也原样透传：视为无冲突，继续姿势生成
                     check_raw = await self._check_pose_compatibility(prompt, pose_file)
+                    logger.info(f"查看check原始结果：{check_raw}")
                     if not self._dvq_has_issues(check_raw):
                         flow_log.append(f"③④检查: 第{round_no + 1}轮 通过")
                         break
