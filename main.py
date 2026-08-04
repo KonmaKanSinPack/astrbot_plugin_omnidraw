@@ -1316,6 +1316,10 @@ class OmniDrawPlugin(Star):
                 if img_ref.startswith("data:image"):
                     try:
                         decoded, content_type = split_data_url(img_ref)
+                        # 与发送图一致的压缩（最长边1024 + JPEG q85），规避大小限制并加速上传
+                        compressed = self._compress_image_for_send(decoded, content_type)
+                        if compressed is not None:
+                            decoded, content_type = compressed
                         if len(decoded) > MAX_IMAGE_BYTES:
                             raise ValueError("Base64 图片超过大小限制")
                         file_path = await asyncio.to_thread(
@@ -1336,15 +1340,39 @@ class OmniDrawPlugin(Star):
                     abs_path = os.path.abspath(img_ref)
                     if os.path.exists(abs_path):
                         try:
-                            if os.path.getsize(abs_path) > MAX_IMAGE_BYTES:
-                                raise ValueError(f"图片超过大小限制 {MAX_IMAGE_BYTES // 1024 // 1024}MB")
+                            # 与发送图一致的压缩（最长边1024 + JPEG q85），规避大小限制并加速上传
+                            compressed = await asyncio.to_thread(
+                                self._compress_ref_image, abs_path
+                            )
+                            if compressed is not None:
+                                decoded, content_type = compressed
+                                if len(decoded) > MAX_IMAGE_BYTES:
+                                    raise ValueError(
+                                        f"图片超过大小限制 {MAX_IMAGE_BYTES // 1024 // 1024}MB"
+                                    )
+                                file_path = await asyncio.to_thread(
+                                    save_image_bytes,
+                                    decoded,
+                                    save_dir,
+                                    abs_path,
+                                    "ref",
+                                    idx,
+                                    content_type,
+                                )
+                                processed_paths.append(file_path)
+                            else:
+                                # 压缩失败（如 GIF/读取异常）→ 原样走大小检查
+                                if os.path.getsize(abs_path) > MAX_IMAGE_BYTES:
+                                    raise ValueError(
+                                        f"图片超过大小限制 {MAX_IMAGE_BYTES // 1024 // 1024}MB"
+                                    )
+                                processed_paths.append(abs_path)
                         except OSError as exc:
                             logger.warning(f"[OmniDraw] 本地参考图无法读取: {abs_path} ({exc})")
                             continue
                         except ValueError as exc:
                             logger.warning(f"[OmniDraw] 本地参考图超过大小限制: {abs_path} ({exc})")
                             continue
-                        processed_paths.append(abs_path)
                     else:
                         logger.warning(f"[OmniDraw] 本地参考图不存在: {abs_path}")
                     continue
@@ -1719,6 +1747,17 @@ class OmniDrawPlugin(Star):
             img.save(buf, format="JPEG", quality=85)
             return buf.getvalue(), "image/jpeg"
         except Exception:
+            return None
+
+    @staticmethod
+    def _compress_ref_image(abs_path: str) -> Optional[Tuple[bytes, str]]:
+        """读取本地参考图并压缩（同发送图: 最长边1024 + JPEG q85）。失败返回 None。"""
+        try:
+            with open(abs_path, "rb") as f:
+                raw = f.read()
+            content_type = mimetypes.guess_type(abs_path)[0] or "image/png"
+            return OmniDraw._compress_image_for_send(raw, content_type)
+        except OSError:
             return None
 
     def _format_generation_elapsed(self, elapsed_seconds: Optional[float]) -> str:
