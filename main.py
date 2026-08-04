@@ -1684,12 +1684,42 @@ class OmniDrawPlugin(Star):
         if image_url.startswith("data:image"):
             image_bytes, content_type = split_data_url(image_url)
             save_dir = os.path.join(self.data_dir, "temp_images")
+            # 发送前压缩: 大图(如 1024x1536 PNG ~2MB)会让 NapCat 上传超时,
+            # 消息实际已送达但内核回执超时被误判为失败。压缩后 ~200-400KB。
+            compressed = self._compress_image_for_send(image_bytes, content_type)
+            if compressed is not None:
+                image_bytes, content_type = compressed
             file_path = save_image_bytes(image_bytes, save_dir, image_url, "img", 0, content_type)
             self._prune_cache_if_needed("temp_images", protected_paths=[file_path])
             return Image.fromFileSystem(file_path)
         if image_url.startswith("http"):
             return Image.fromURL(image_url)
         return Image.fromFileSystem(os.path.abspath(image_url))
+
+    @staticmethod
+    def _compress_image_for_send(
+        image_bytes: bytes, content_type: str
+    ) -> Optional[Tuple[bytes, str]]:
+        """压缩聊天发送图: 最长边 1024 + JPEG q85。失败返回 None(原样发送)。"""
+        if "gif" in str(content_type).lower():
+            return None  # 动图不压缩
+        try:
+            import io
+            from PIL import Image as PILImage
+            img = PILImage.open(io.BytesIO(image_bytes))
+            img.load()
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            max_side = 1024
+            w, h = img.size
+            if max(w, h) > max_side:
+                ratio = max_side / max(w, h)
+                img = img.resize((int(w * ratio), int(h * ratio)), PILImage.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            return buf.getvalue(), "image/jpeg"
+        except Exception:
+            return None
 
     def _format_generation_elapsed(self, elapsed_seconds: Optional[float]) -> str:
         try:
