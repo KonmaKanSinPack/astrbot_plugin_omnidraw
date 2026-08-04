@@ -3632,16 +3632,17 @@ class OmniDrawPlugin(Star):
                 flow_log.append(f"②拟稿: {'经验种子' if seed else '从零'}")
 
                 for round_no in range(2):
-                    issues = await self._check_pose_compatibility(prompt, pose_file)
-                    if issues is None:
+                    check_raw = await self._check_pose_compatibility(prompt, pose_file)
+                    if check_raw is None:
                         degraded = "视觉检查不可用（quality_provider 未配置或调用失败）"
                         flow_log.append(f"③④检查: 第{round_no + 1}轮 视觉不可用")
                         break
-                    if not issues:
+                    if not self._dvq_has_issues(check_raw):
                         flow_log.append(f"③④检查: 第{round_no + 1}轮 通过")
                         break
-                    flow_log.append(f"③④检查: 第{round_no + 1}轮 {len(issues)} 处冲突")
-                    refined = await self._refine_pose_prompt(prompt, issues)
+                    flow_log.append(f"③④检查: 第{round_no + 1}轮 有冲突")
+                    # 完整原始响应（含理由/建议）直接交给优化，不做二次加工
+                    refined = await self._refine_pose_prompt(prompt, check_raw)
                     if refined:
                         prompt = refined
             except Exception as exc:
@@ -3736,8 +3737,8 @@ class OmniDrawPlugin(Star):
 
     async def _check_pose_compatibility(
         self, prompt: str, pose_file: str
-    ) -> Optional[List[str]]:
-        """DVQ 检查：prompt 与 pose 图冲突项列表。通过=[]，视觉不可用=None。"""
+    ) -> Optional[str]:
+        """DVQ 检查：返回视觉 LLM 的**完整原始响应**（不做二次加工）。视觉不可用返回 None。"""
         checklist = (
             "a. 图中人物数量与提示词要求一致？\n"
             "b. 所有肢体完整可见（无被遮挡画不出的部分）？\n"
@@ -3757,20 +3758,23 @@ class OmniDrawPlugin(Star):
         )
         if not content:
             return None
-        issues = [
-            line.strip()
-            for line in str(content).splitlines()
-            if re.match(r"^[a-e]\s*[:：]\s*(NO|no)\b", line.strip())
-        ]
-        return issues
+        return str(content).strip()
 
-    async def _refine_pose_prompt(self, prompt: str, issues: List[str]) -> str:
-        """按 DVQ 冲突理由修改 prompt。失败返回空串（沿用原 prompt）。"""
+    @staticmethod
+    def _dvq_has_issues(raw: str) -> bool:
+        """轻量判断 DVQ 响应是否含 NO（只做判定，不加工响应内容）。"""
+        return any(
+            re.match(r"^[a-e]\s*[:：]\s*(NO|no)\b", line.strip())
+            for line in str(raw).splitlines()
+        )
+
+    async def _refine_pose_prompt(self, prompt: str, check_raw: str) -> str:
+        """按 DVQ 完整检查结果（含理由/建议）修改 prompt。失败返回空串（沿用原 prompt）。"""
         p = (
-            "以下提示词与姿势参考图存在冲突，请修改提示词消除冲突"
+            "以下提示词与姿势参考图存在冲突，请根据检查结果修改提示词消除冲突"
             "（如调整动作描述、人物数量，删除与姿势矛盾的内容），其余保持：\n"
             f"<原提示词>\n{prompt}\n</原提示词>\n"
-            f"<冲突>\n" + "\n".join(issues) + "\n</冲突>\n"
+            f"<检查结果>\n{check_raw}\n</检查结果>\n"
             "只输出修改后的完整提示词，不要解释。"
         )
         return str(await self._judge_llm(p) or "").strip()
