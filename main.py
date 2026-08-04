@@ -3632,11 +3632,8 @@ class OmniDrawPlugin(Star):
                 flow_log.append(f"②拟稿: {'经验种子' if seed else '从零'}")
 
                 for round_no in range(2):
+                    # 视觉失败返回空串也原样透传：视为无冲突，继续姿势生成
                     check_raw = await self._check_pose_compatibility(prompt, pose_file)
-                    if check_raw is None:
-                        degraded = "视觉检查不可用（quality_provider 未配置或调用失败）"
-                        flow_log.append(f"③④检查: 第{round_no + 1}轮 视觉不可用")
-                        break
                     if not self._dvq_has_issues(check_raw):
                         flow_log.append(f"③④检查: 第{round_no + 1}轮 通过")
                         break
@@ -3737,8 +3734,12 @@ class OmniDrawPlugin(Star):
 
     async def _check_pose_compatibility(
         self, prompt: str, pose_file: str
-    ) -> Optional[str]:
-        """DVQ 检查：返回视觉 LLM 的**完整原始响应**（不做二次加工）。视觉不可用返回 None。"""
+    ) -> str:
+        """DVQ 检查：返回视觉 LLM 的**完整原始响应**，不做二次加工。
+
+        视觉模型失败/超时返回空串时也原样透传（失败=视为无冲突继续流程），
+        不在本层拦截或降级——检查是建议性的，失败不应丢掉姿势生成。
+        """
         checklist = (
             "a. 图中人物数量与提示词要求一致？\n"
             "b. 所有肢体完整可见（无被遮挡画不出的部分）？\n"
@@ -3756,9 +3757,7 @@ class OmniDrawPlugin(Star):
         content = await self._judge_llm(
             prompt_text, image_urls=[self._to_vision_data_url(pose_file)]
         )
-        if not content:
-            return None
-        return str(content).strip()
+        return str(content or "").strip()
 
     @staticmethod
     def _dvq_has_issues(raw: str) -> bool:
