@@ -1756,7 +1756,7 @@ class OmniDrawPlugin(Star):
             with open(abs_path, "rb") as f:
                 raw = f.read()
             content_type = mimetypes.guess_type(abs_path)[0] or "image/png"
-            return OmniDrawPlugin._compress_image_for_send(raw, content_type)
+            return OmniDraw._compress_image_for_send(raw, content_type)
         except OSError:
             return None
 
@@ -3194,53 +3194,32 @@ class OmniDrawPlugin(Star):
         provider_id = getattr(self.plugin_config.pose_library, "quality_provider", "")
         if provider_id:
             try:
-                getter = getattr(self.context, "get_provider_by_id", None)
+                getter = getattr(self.context, "get_provider", None)
                 if callable(getter):
                     provider = getter(provider_id)
-                else:
-                    logger.warning("[OmniDraw] context 无 get_provider_by_id 方法")
-            except Exception as exc:
-                logger.warning(f"[OmniDraw] get_provider_by_id({provider_id}) 异常: {exc}")
+            except Exception:
                 provider = None
-            if provider is None:
-                logger.warning(f"[OmniDraw] quality_provider 未找到: {provider_id}")
         if provider is None:
             try:
                 provider = self.context.get_using_provider()
-                if provider is not None:
-                    logger.info(f"[OmniDraw] 回退到当前 provider: {provider}")
-            except Exception as exc:
-                logger.warning(f"[OmniDraw] get_using_provider 异常: {exc}")
+            except Exception:
                 provider = None
-        if provider is None:
-            logger.warning("[OmniDraw] 无可用 provider，返回空串")
-            return ""
-        if not hasattr(provider, "text_chat"):
-            logger.warning(f"[OmniDraw] provider {provider} 无 text_chat 方法")
+        if provider is None or not hasattr(provider, "text_chat"):
             return ""
 
         logger.info(f"查看provider:{provider}")
         try:
-            llm_resp = await asyncio.wait_for(
-                provider.text_chat(
-                    prompt=prompt,
-                    session_id=None,
-                    contexts=[],
-                    image_urls=image_urls or [],
-                    func_tool=None,
-                    system_prompt=system_prompt,
-                ),
-                timeout=45,
+            llm_resp = await provider.text_chat(
+                prompt=prompt,
+                session_id=None,
+                contexts=[],
+                image_urls=image_urls or [],
+                func_tool=None,
+                system_prompt=system_prompt,
             )
-            result = str(getattr(llm_resp, "completion_text", "") or "").strip()
-            if not result:
-                logger.warning("[OmniDraw] provider.text_chat 返回空 completion_text")
-            return result
-        except asyncio.TimeoutError:
-            logger.warning("[OmniDraw] provider.text_chat 超时（45s）")
-            return ""
+            return str(getattr(llm_resp, "completion_text", "") or "").strip()
         except Exception as exc:
-            logger.warning(f"[OmniDraw] AstrBot provider 质检调用失败: {exc}", exc_info=True)
+            logger.warning(f"[OmniDraw] AstrBot provider 质检调用失败: {exc}")
             return ""
 
     async def _translate_pose_tags(self, description: str) -> str:
@@ -3312,7 +3291,6 @@ class OmniDrawPlugin(Star):
         失败返回占位文案，不中断主流程。
         """
         prompt = (
-            "/nsfw "
             "你是一名动漫美术师的姿势参考图分析助手。请客观、技术性地描述这张图片。\n"
             "要点：人物数量与姿势动作、视角与构图、肢体结构（手臂/腿部/身体朝向）、"
             "以及可作为绘画参考的细节（服饰、道具、动态）。\n"
@@ -3604,7 +3582,7 @@ class OmniDrawPlugin(Star):
             if str(describe_mode).strip().lower() == "image":
                 # 直接传图像：把每张图以 data URL 放进结果，由视觉 LLM 直接看图
                 img_lines = []
-                for i, e in enumerate(entries[:2]):
+                for i, e in enumerate(entries):
                     img_lines.append(f"图片 {i + 1}: {self._to_vision_data_url(e['file'])}")
                 return (
                     head + "\n" + "\n".join(lines)
@@ -3612,7 +3590,7 @@ class OmniDrawPlugin(Star):
                     + "\n直接查看图片内容，挑选最合适的姿势图，将其 file 路径作为 refs 参数传给 generate_image 使用。"
                 )
             desc_lines = []
-            for i, e in enumerate(entries[:3]):
+            for i, e in enumerate(entries):
                 desc = await self._describe_pose_image(e["file"])
                 desc_lines.append(f"姿势图 {i + 1} 描述: {desc}")
             return (
@@ -3712,46 +3690,23 @@ class OmniDrawPlugin(Star):
         # ⑤ 生成（降级时无姿势参考）
         try:
             count = self._normalize_count(count)
-            # 多候选姿势图：单张失败自动换下一张重试（部分姿势图可能被绘图 API 拒收）
-            pose_candidates = [e["file"] for e in entries] if entries else [""]
-            valid_results = []
-            last_detail = ""
-            for pose_try in pose_candidates:
-                try:
-                    generation = await self._run_text2img_generation(
-                        event, prompt, count,
-                        aspect_ratio=aspect_ratio,
-                        size=size,
-                        refs=pose_try or self._get_event_images(event),
-                        pose=bool(pose_try),
-                    )
-                    valid_results = [
-                        r for r in generation["results"] if self._get_image_result_url(r)
-                    ]
-                    if valid_results:
-                        pose_file = pose_try
-                        if len(pose_candidates) > 1 and pose_try:
-                            flow_log.append(f"⑤生成: 使用姿势图 {pose_try} 成功")
-                        break
-                    errors = [
-                        self._safe_plugin_error_message(r)
-                        for r in generation.get("results", [])
-                        if isinstance(r, Exception) or not self._get_image_result_url(r)
-                    ]
-                    last_detail = "; ".join(errors) if errors else ""
-                    flow_log.append(f"⑤生成: 姿势图{pose_try} 无结果，换下一张")
-                except Exception as exc:
-                    last_detail = str(exc)
-                    flow_log.append(f"⑤生成: 姿势图{pose_try} 异常({exc})，换下一张")
-                    continue
+            generation = await self._run_text2img_generation(
+                event, prompt, count,
+                aspect_ratio=aspect_ratio,
+                size=size,
+                refs=pose_file or self._get_event_images(event),
+                pose=bool(pose_file),
+            )
+            valid_results = [
+                r for r in generation["results"] if self._get_image_result_url(r)
+            ]
             if not valid_results:
-                raise RuntimeError(f"所有绘图节点请求失败 {last_detail}".strip())
+                raise RuntimeError("所有绘图节点请求失败")
             sent = await self._send_generated_images(event, valid_results)
             self._record_generated_images(event, sent)
         except Exception as exc:
             logger.error(f"[OmniDraw] generate_with_pose 生成失败: {exc}", exc_info=True)
-            debug_info = f"\n[debug] prompt: {prompt}\n[debug] refs: {pose_file}\n[debug] flow: {','.join(flow_log)}"
-            return f"系统提示：生成失败 ({exc})。请换一种描述重试。{debug_info}"
+            return f"系统提示：生成失败 ({exc})。请换一种描述重试。"
 
         # 经验回写（全流程成功时）
         if not degraded and pose_file and tags:

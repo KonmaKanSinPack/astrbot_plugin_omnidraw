@@ -45,20 +45,14 @@ class PoseLibrary:
     # ---------- 查询 ----------
 
     async def query(self, keyword: str) -> list[dict]:
-        """按关键词模糊匹配本地索引（tags/description），返回匹配条目。
-
-        支持多关键词（空格分隔）AND 匹配，如 "doggystyle 1girl"。
-        """
+        """按关键词模糊匹配本地索引（tags/description），返回匹配条目。"""
         keyword = str(keyword or "").strip().lower()
         if not keyword:
-            return []
-        keywords = [k for k in keyword.split() if k]
-        if not keywords:
             return []
         results = []
         for entry in self._load_index():
             haystack = f"{entry.get('tags', '')} {entry.get('description', '')}".lower()
-            if all(k in haystack for k in keywords):
+            if keyword in haystack:
                 results.append(entry)
         return results
 
