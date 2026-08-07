@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#C1E6FF" />
+    <title>OmniDraw Station</title>
+    <link rel="icon" href="./logo.png" />
+    <link rel="stylesheet" href="./style.css?v=3.3.23" />
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand-block">
+                <div class="brand-mark" aria-hidden="true">
+                    <img src="./logo.png" alt="" />
+                </div>
+                <div>
+                    <h1>万象画卷</h1>
+                    <p>OmniDraw Station</p>
+                </div>
+            </div>
+            <div class="sidebar-status"><span></span>SYSTEM_ONLINE</div>
+
+            <nav class="nav-menu" aria-label="配置导航">
+                <div class="nav-label">GATEWAY</div>
+                <button class="nav-item active" data-target="tab-basic" type="button">
+                    <span class="nav-icon">⚙</span><span>全局</span>
+                </button>
+                <button class="nav-item" data-target="tab-usage" type="button">
+                    <span class="nav-icon">#</span><span>用量</span>
+                </button>
+                <div class="nav-label">CREATIVE</div>
+                <button class="nav-item" data-target="tab-persona" type="button">
+                    <span class="nav-icon">◎</span><span>人设</span>
+                </button>
+                <button class="nav-item" data-target="tab-hub" type="button">
+                    <span class="nav-icon">↔</span><span>调度</span>
+                </button>
+                <div class="nav-label">INTELLIGENCE</div>
+                <button class="nav-item" data-target="tab-optimizer" type="button">
+                    <span class="nav-icon">✦</span><span>副脑</span>
+                </button>
+                <button class="nav-item" data-target="tab-presets" type="button">
+                    <span class="nav-icon">⌘</span><span>宏</span>
+                </button>
+                <div class="nav-label">INFRASTRUCTURE</div>
+                <button class="nav-item" data-target="tab-nodes" type="button">
+                    <span class="nav-icon">▣</span><span>节点</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-metrics">
+                <div><span id="metric-image-nodes">0</span><small>图像节点</small></div>
+                <div><span id="metric-video-nodes">0</span><small>视频节点</small></div>
+                <div><span id="metric-presets">0</span><small>宏指令</small></div>
+                <div><span id="metric-today-images">0</span><small>今日生图</small></div>
+            </div>
+
+            <div class="save-panel">
+                <div class="save-state" id="save-state">配置已同步</div>
+                <button data-action="save-config" class="btn-primary" type="button">保存更改</button>
+            </div>
+        </aside>
+
+        <main class="content">
+            <header class="topbar">
+                <div>
+                    <span class="eyebrow">PLUGIN SETTINGS</span>
+                    <h2 id="active-title">全局配置</h2>
+                </div>
+                <div class="status-pill"><span></span>READY</div>
+            </header>
+
+            <section id="tab-basic" class="tab-pane active" data-title="全局配置">
+                <div class="page-grid compact">
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h3>访问控制</h3>
+                                <p>黑名单优先；可使用人员白名单会直接限制谁能用；用户白名单与群白名单只负责不限次数。</p>
+                            </div>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group full-width">
+                                <label for="perm_usable_users">可使用人员白名单（仅这些人能用）</label>
+                                <textarea id="perm_usable_users" rows="4" class="input-modern" placeholder="10001&#10;10002"></textarea>
+                            </div>
+                            <div class="form-group full-width">
+                                <label for="perm_allowed_users">用户白名单（不限次数）</label>
+                                <textarea id="perm_allowed_users" rows="4" class="input-modern" placeholder="10001&#10;10002"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="perm_blocked_users">用户黑名单</label>
+                                <textarea id="perm_blocked_users" rows="4" class="input-modern" placeholder="20001&#10;20002"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="perm_unlimited_groups">群组白名单（QQ 群）</label>
+                                <textarea id="perm_unlimited_groups" rows="4" class="input-modern" placeholder="123456789&#10;987654321"></textarea>
+                            </div>
+                        </div>
+                    </article>
+
+                    <article class="card">
+                        <div class="setting-row">
+                            <div>
+                                <h3>详细汇报模式</h3>
+                                <p>绘制前展示提示词、参数量和参考图数量。</p>
+                            </div>
+                            <label class="switch-wrapper" for="verbose_report">
+                                <input type="checkbox" id="verbose_report" class="ios-switch" />
+                            </label>
+                        </div>
+                    </article>
+
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h3>成功结果信息</h3>
+                                <p>控制 /画、宏指令、/自拍 和 /视频 指令成功后是否附带生成耗时与请求模型。</p>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div>
+                                <h3>显示生成耗时</h3>
+                                <p>成功消息中展示本次生成等待时间。</p>
+                            </div>
+                            <label class="switch-wrapper" for="show_generation_time">
+                                <input type="checkbox" id="show_generation_time" class="ios-switch" />
+                            </label>
+                        </div>
+                        <div class="setting-row">
+                            <div>
+                                <h3>显示请求模型</h3>
+                                <p>成功消息中展示实际完成请求的模型名。</p>
+                            </div>
+                            <label class="switch-wrapper" for="show_request_model">
+                                <input type="checkbox" id="show_request_model" class="ios-switch" />
+                            </label>
+                        </div>
+                    </article>
+
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h3>指令回复文案</h3>
+                                <p>自定义 /画、/自拍 和宏指令开始生成前发出的等待回复。</p>
+                            </div>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group full-width">
+                                <label for="reply_draw_pending">/画 与宏指令等待回复</label>
+                                <textarea id="reply_draw_pending" rows="3" class="input-modern"></textarea>
+                            </div>
+                            <div class="form-group full-width">
+                                <label for="reply_selfie_pending">/自拍 等待回复</label>
+                                <textarea id="reply_selfie_pending" rows="3" class="input-modern"></textarea>
+                            </div>
+                            <div class="form-group full-width">
+                                <label for="reply_draw_error">/画 与宏指令失败回复</label>
+                                <textarea id="reply_draw_error" rows="3" class="input-modern"></textarea>
+                            </div>
+                            <div class="form-group full-width">
+                                <label for="reply_selfie_error">/自拍 失败回复</label>
+                                <textarea id="reply_selfie_error" rows="3" class="input-modern"></textarea>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <section id="tab-usage" class="tab-pane" data-title="用量管理">
+                <div class="page-grid compact">
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h3>每日限额</h3>
+                                <p>按 AstrBot 用户 ID 统计成功生图张数。</p>
+                            </div>
+                            <label class="switch-wrapper" for="usage_enable">
+                                <input type="checkbox" id="usage_enable" class="ios-switch" />
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label for="usage_daily_limit">每人每日上限</label>
+                            <input type="number" id="usage_daily_limit" class="input-modern" min="1" />
+                        </div>
+                    </article>
+
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h3>签到奖励</h3>
+                                <p>仅对有权限且仍受限额影响的用户生效。</p>
+                            </div>
+                            <label class="switch-wrapper" for="usage_checkin_enable">
+                                <input type="checkbox" id="usage_checkin_enable" class="ios-switch" />
+                            </label>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="usage_checkin_min">最小奖励张数</label>
+                                <input type="number" id="usage_checkin_min" class="input-modern" min="0" />
+                            </div>
+                            <div class="form-group">
+                                <label for="usage_checkin_max">最大奖励张数</label>
+                                <input type="number" id="usage_checkin_max" class="input-modern" min="0" />
+                            </div>
+                        </div>
+                    </article>
+
+                    <article class="card">
+                        <div class="card-header space-between">
+                            <div>
+                                <h3>今日统计</h3>
+                                <p id="usage-stat-date">今日</p>
+                            </div>
+                            <button data-action="refresh-usage" class="btn-secondary" type="button">刷新</button>
+                        </div>
+                        <div class="usage-summary">
+                            <div><span id="usage-stat-total">0</span><small>总张数</small></div>
+                            <div><span id="usage-stat-users">0</span><small>用户数</small></div>
+                            <div><span id="usage-stat-limit">不限</span><small>限额</small></div>
+                        </div>
+                        <div class="usage-user-list" id="usage-users-container"></div>
+                    </article>
+
+                    <article class="card">
+                        <div class="card-header space-between">
+                            <div>
+                                <h3>图片缓存</h3>
+                                <p>仅管理 temp_images 与 user_refs，不触碰人设参考图。</p>
+                            </div>
+                            <div class="button-row">
+                                <button data-action="refresh-cache" class="btn-secondary" type="button">刷新</button>
+                                <button data-action="clear-cache" class="btn-secondary btn-danger" type="button">清理缓存</button>
+                            </div>
+                        </div>
+                        <div class="cache-summary">
+                            <div><span id="cache-total-count">0</span><small>图片总数</small></div>
+                            <div><span id="cache-total-size">0 B</span><small>缓存体积</small></div>
+                            <div><span id="cache-temp-count">0</span><small>发送给用户</small></div>
+                            <div><span id="cache-refs-count">0</span><small>用户参考图</small></div>
+                        </div>
+                        <div class="cache-breakdown">
+                            <div><strong>temp_images</strong><span id="cache-temp-size">0 B</span></div>
+                            <div><strong>user_refs</strong><span id="cache-refs-size">0 B</span></div>
+                        </div>
+                    </article>
+
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h3>自动清理</h3>
+                                <p>定时清空缓存，或在缓存容量超过上限时删除最旧图片。</p>
+                            </div>
+                        </div>
+                        <div class="form-grid">
+                            <div class="setting-row cache-setting-row full-width">
+                                <div>
+                                    <h3>定时清理</h3>
+                                    <p>按固定间隔清空两个缓存目录中的图片。</p>
+                                </div>
+                                <label class="switch-wrapper" for="cache_scheduled_enable">
+                                    <input type="checkbox" id="cache_scheduled_enable" class="ios-switch" />
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label for="cache_scheduled_hours">清理间隔（小时）</label>
+                                <input type="number" id="cache_scheduled_hours" class="input-modern" min="1" />
+                            </div>
+                            <div class="setting-row cache-setting-row full-width">
+                                <div>
+                                    <h3>容量上限清理</h3>
+                                    <p>超过上限时优先删除最旧的缓存图片。</p>
+                                </div>
+                                <label class="switch-wrapper" for="cache_limit_enable">
+                                    <input type="checkbox" id="cache_limit_enable" class="ios-switch" />
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label for="cache_max_mb">缓存容量上限（MB）</label>
+                                <input type="number" id="cache_max_mb" class="input-modern" min="1" />
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </section>
+
+            <section id="tab-persona" class="tab-pane" data-title="人设档案">
+                <div class="page-grid">
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h3>基础人设</h3>
+                                <p>自拍模式会与副脑输出合并。</p>
+                            </div>
+                        </div>
+                        <div class="persona-manager">
+                            <div class="persona-profiles" id="persona-profiles-container"></div>
+                            <button class="btn-glass-secondary" data-action="add-persona" type="button">新增人设</button>
+                        </div>
+                        <div class="form-group">
+                            <label for="persona_name">实体代号</label>
+                            <input type="text" id="persona_name" class="input-modern" data-sync="persona-name" />
+                        </div>
+                        <div class="form-group">
+                            <label for="persona_prompt">底层特征序列 (Base Prompt)</label>
+                            <textarea id="persona_prompt" rows="7" class="input-modern" data-sync="persona-prompt"></textarea>
+                        </div>
+                    </article>
+
+                    <article class="card">
+                        <div class="card-header">
+                            <div>
+                                <h3>参考图矩阵</h3>
+                                <p>支持多张形象参考图。最好1-3张，建议控制在5张以内。</p>
+                            </div>
+                        </div>
+                        <div class="multi-upload-container" id="persona-upload-container">
+                            <button class="upload-trigger" id="persona-upload-trigger" type="button">
+                                <span class="upload-icon">+</span>
+                                <span class="upload-text">添加图片</span>
+                            </button>
+                        </div>
+                        <input type="file" id="hidden-file-input" accept="image/png, image/jpeg, image/webp" multiple hidden />
+                    </article>
+                </div>
+            </section>
+
+            <section id="tab-hub" class="tab-pane" data-title="生成调度">
+                <article class="card wide-card">
+                    <div class="card-header">
+                        <div>
+                            <h3>链路路由</h3>
+                            <p>把不同任务指向对应节点。</p>
+                        </div>
+                    </div>
+                    <div class="route-stack">
+                        <div class="route-row">
+                            <label>图像生成</label>
+                            <div class="route-control">
+                                <div class="route-main-line">
+                                    <div class="node-selector" id="sel-route-img"></div>
+                                    <label class="route-backup-panel" for="route_img_backup">
+                                        <span>备用节点</span>
+                                        <input type="checkbox" id="route_img_backup" class="ios-switch route-backup-toggle" data-route="text2img" />
+                                    </label>
+                                </div>
+                                <div class="route-backup-selector" id="sel-route-img-backup"></div>
+                            </div>
+                            <input type="hidden" id="route_img" />
+                        </div>
+                        <div class="route-row">
+                            <label>人设自拍</label>
+                            <div class="route-control">
+                                <div class="route-main-line">
+                                    <div class="node-selector" id="sel-route-selfie"></div>
+                                    <label class="route-backup-panel" for="route_selfie_backup">
+                                        <span>备用节点</span>
+                                        <input type="checkbox" id="route_selfie_backup" class="ios-switch route-backup-toggle" data-route="selfie" />
+                                    </label>
+                                </div>
+                                <div class="route-backup-selector" id="sel-route-selfie-backup"></div>
+                            </div>
+                            <input type="hidden" id="route_selfie" />
+                        </div>
+                        <div class="route-row">
+                            <label>视频渲染</label>
+                            <div class="route-control">
+                                <div class="route-main-line">
+                                    <div class="node-selector-video" id="sel-route-video"></div>
+                                    <label class="route-backup-panel" for="route_video_backup">
+                                        <span>备用节点</span>
+                                        <input type="checkbox" id="route_video_backup" class="ios-switch route-backup-toggle" data-route="video" />
+                                    </label>
+                                </div>
+                                <div class="route-backup-selector" id="sel-route-video-backup"></div>
+                            </div>
+                            <input type="hidden" id="route_video" />
+                        </div>
+                    </div>
+                </article>
+            </section>
+
+            <section id="tab-optimizer" class="tab-pane" data-title="副脑引擎">
+                <article class="card highlight-card wide-card">
+                    <div class="card-header">
+                        <div>
+                            <h3>Prompt Optimizer</h3>
+                            <p>提示词重构与风格增强。</p>
+                        </div>
+                        <label class="switch-wrapper" for="opt_enable">
+                            <input type="checkbox" id="opt_enable" class="ios-switch" />
+                        </label>
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="switch-row" for="opt_astrbot">
+                                <span>使用 AstrBot 当前文本模型</span>
+                                <input type="checkbox" id="opt_astrbot" class="ios-switch" />
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label for="opt_style">画风协议</label>
+                            <select id="opt_style" class="input-modern">
+                                <option value="手机日常原生感">手机日常原生感</option>
+                                <option value="自拍专用极致真实">自拍专用极致真实</option>
+                                <option value="电影级光影大片">电影级光影大片</option>
+                                <option value="日系插画大师">日系插画大师</option>
+                                <option value="3D 潮玩盲盒">3D 潮玩盲盒</option>
+                                <option value="自定义模式">自定义模式</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>处理节点</label>
+                            <div class="node-selector" id="sel-opt-chain"></div>
+                            <input type="hidden" id="opt_chain" />
+                        </div>
+                        <div class="form-group">
+                            <label for="opt_model">模型核心</label>
+                            <input type="text" id="opt_model" class="input-modern" />
+                        </div>
+                        <div class="form-group">
+                            <label for="opt_timeout">超时限制 (秒)</label>
+                            <input type="number" id="opt_timeout" class="input-modern" min="1" />
+                        </div>
+                        <div class="form-group">
+                            <label for="opt_batch">批量上限</label>
+                            <input type="number" id="opt_batch" class="input-modern" min="0" />
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="opt_custom">自定义注入要求</label>
+                            <textarea id="opt_custom" rows="4" class="input-modern" placeholder="补充特定的画面要求..."></textarea>
+                        </div>
+                    </div>
+                </article>
+            </section>
+
+            <section id="tab-presets" class="tab-pane" data-title="极速宏预设">
+                <article class="card wide-card">
+                    <div class="card-header space-between">
+                        <div>
+                            <h3>宏指令</h3>
+                            <p>快捷指令与底层提示词映射。</p>
+                        </div>
+                        <button data-action="add-preset" class="btn-secondary" type="button">添加指令</button>
+                    </div>
+                    <div class="list-container" id="presets-container"></div>
+                </article>
+            </section>
+
+            <section id="tab-nodes" class="tab-pane" data-title="算力集群">
+                <article class="card wide-card">
+                    <div class="card-header space-between">
+                        <div>
+                            <h3>图像算力节点</h3>
+                            <p>OpenAI Images、Chat 兼容接口、Gemini 官方或自定义完整路径。</p>
+                        </div>
+                        <button data-action="add-provider" class="btn-secondary" type="button">添加生图节点</button>
+                    </div>
+                    <div class="list-container" id="providers-container"></div>
+                </article>
+
+                <article class="card wide-card">
+                    <div class="card-header space-between">
+                        <div>
+                            <h3>视频渲染节点</h3>
+                            <p>异步轮询、同步阻塞或 Chat 伪装协议。</p>
+                        </div>
+                        <button data-action="add-video-provider" class="btn-secondary" type="button">添加视频节点</button>
+                    </div>
+                    <div class="list-container" id="video-providers-container"></div>
+                </article>
+            </section>
+        </main>
+    </div>
+
+    <div id="toast-container" aria-live="polite"></div>
+    <script type="module" src="./app.js?v=3.3.23"></script>
+</body>
+</html>

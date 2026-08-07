@@ -1,0 +1,511 @@
+{
+  "permission_config": {
+    "description": "权限与额度豁免",
+    "type": "object",
+    "hint": "黑名单优先级最高；可使用人员白名单填写后，仅名单内用户可用；用户白名单与群组白名单只豁免每日限额。",
+    "items": {
+      "usable_users": {
+        "description": "可使用人员白名单（限制谁能使用）",
+        "type": "text",
+        "hint": "留空表示不启用，所有未被黑名单拦截的用户默认可用；填写后只有名单内用户可以调用指令和 LLM 工具。可按行、英文逗号或空格分隔。",
+        "default": ""
+      },
+      "allowed_users": {
+        "description": "用户白名单（不限次数）",
+        "type": "text",
+        "hint": "这里仅表示不限每日次数，不负责限制谁能使用。填写 AstrBot 识别到的用户 ID / QQ 号，可按行、英文逗号或空格分隔。",
+        "default": ""
+      },
+      "blocked_users": {
+        "description": "用户黑名单（禁止使用）",
+        "type": "text",
+        "hint": "黑名单内用户不能调用万象画卷指令和 LLM 工具，优先级高于白名单。",
+        "default": ""
+      },
+      "unlimited_groups": {
+        "description": "群组白名单（群内不限次数）",
+        "type": "text",
+        "hint": "填写 QQ 群号。命中群白名单时，该群内用户不受每日生图次数限制。",
+        "default": ""
+      }
+    }
+  },
+  "usage_config": {
+    "description": "生图用量限制",
+    "type": "object",
+    "hint": "按 AstrBot 事件里的用户 ID 统计每日成功生图张数。用户/群白名单只豁免次数限制，仍会进入统计。",
+    "items": {
+      "enable_daily_limit": {
+        "description": "启用每日用户生图限制",
+        "type": "bool",
+        "default": false
+      },
+      "daily_image_limit": {
+        "description": "每人每日基础上限",
+        "type": "int",
+        "hint": "仅在启用限制时生效。统计单位为图片张数，/画、/自拍、宏指令和 LLM 生图工具都会计入。",
+        "default": 20
+      },
+      "enable_checkin": {
+        "description": "启用签到领额度",
+        "type": "bool",
+        "hint": "仅对有使用权限且仍受每日限额影响的用户生效。白名单/群白名单用户无需签到。",
+        "default": false
+      },
+      "checkin_bonus_min": {
+        "description": "签到奖励最小张数",
+        "type": "int",
+        "hint": "与最大张数相同即为固定奖励；小于最大张数时每天随机发放区间内整数张。",
+        "default": 1
+      },
+      "checkin_bonus_max": {
+        "description": "签到奖励最大张数",
+        "type": "int",
+        "hint": "保存时若小于最小张数，会自动按最小张数处理。",
+        "default": 3
+      }
+    }
+  },
+  "cache_config": {
+    "description": "图片缓存清理",
+    "type": "object",
+    "hint": "只清理插件数据目录下 temp_images 与 user_refs 两个缓存目录里的图片文件；不会清理人设参考图。",
+    "items": {
+      "enable_scheduled_cleanup": {
+        "description": "启用定时清理",
+        "type": "bool",
+        "hint": "启用后按下方间隔自动清空 temp_images 与 user_refs 中的图片缓存。",
+        "default": false
+      },
+      "scheduled_cleanup_interval_hours": {
+        "description": "定时清理间隔（小时）",
+        "type": "int",
+        "hint": "最小 1 小时。到点后会清空两个缓存目录内的图片文件。",
+        "default": 24
+      },
+      "enable_size_limit_cleanup": {
+        "description": "启用容量上限自动清理",
+        "type": "bool",
+        "hint": "启用后，当 temp_images 与 user_refs 图片缓存总量超过上限，会优先删除最旧的缓存图片。",
+        "default": false
+      },
+      "max_cache_size_mb": {
+        "description": "缓存容量上限（MB）",
+        "type": "int",
+        "hint": "仅在启用容量上限自动清理时生效，最小 1 MB。",
+        "default": 512
+      }
+    }
+  },
+  "reply_config": {
+    "description": "指令回复文案",
+    "type": "object",
+    "hint": "自定义 /画、/自拍 和宏指令在开始生成前的等待回复，以及失败时的报错回复。留空会自动恢复内置默认文案。",
+    "items": {
+      "draw_pending_message": {
+        "description": "/画 与宏指令等待回复",
+        "type": "text",
+        "hint": "支持占位符：{command}、{prompt}、{ref_count}、{param_count}、{persona_name}。",
+        "default": "🎨 收到灵感，正在绘制..."
+      },
+      "selfie_pending_message": {
+        "description": "/自拍 等待回复",
+        "type": "text",
+        "hint": "支持占位符：{persona_name}、{user_input}、{prompt}、{ref_count}、{param_count}、{command}。",
+        "default": "ℹ️ 正在为「{persona_name}」生成自拍，请稍候..."
+      },
+      "draw_error_message": {
+        "description": "/画 与宏指令失败回复",
+        "type": "text",
+        "hint": "支持占位符：{command}、{error}、{error_type}、{persona_name}。",
+        "default": "💥 绘制失败: {error}"
+      },
+      "selfie_error_message": {
+        "description": "/自拍 失败回复",
+        "type": "text",
+        "hint": "支持占位符：{command}、{error}、{error_type}、{persona_name}。",
+        "default": "💥 自拍生成失败: {error}"
+      },
+      "describe_generated_image": {
+        "description": "LLM 工具返回图像描述（需 vision 模型）",
+        "type": "bool",
+        "hint": "开启后，LLM 调用 generate_image / generate_selfie 生图成功时会额外调一次 vision 模型描述图像内容并返回描述文字。需要副脑 provider 配置的模型支持 vision。",
+        "default": false
+      }
+    }
+  },
+  "router_config": {
+    "description": "模型链路路由 / 备用节点",
+    "type": "object",
+    "hint": "填写下方 Provider 的节点 ID。第一个节点为主节点，后续节点为备用节点；多个节点可用英文逗号、空格或换行分隔，插件会按填写顺序逐个尝试。",
+    "items": {
+      "chain_text2img": {
+        "description": "文生图 / 图生图链路",
+        "type": "string",
+        "hint": "默认 node_1。第一个 ID 是图像生成主节点，后面的 ID 是备用节点，例如：node_1,node_2,node_3。",
+        "default": "node_1"
+      },
+      "chain_selfie": {
+        "description": "自拍链路",
+        "type": "string",
+        "hint": "默认 node_1。第一个 ID 是人设自拍主节点，后面的 ID 是备用节点；自拍会使用当前人设的参考图组。",
+        "default": "node_1"
+      },
+      "chain_video": {
+        "description": "视频链路",
+        "type": "string",
+        "hint": "默认 video_node_1。第一个 ID 是视频渲染主节点，后面的 ID 是备用节点，例如：video_node_1,video_node_2。",
+        "default": "video_node_1"
+      }
+    }
+  },
+  "providers": {
+    "description": "图像 Provider",
+    "type": "template_list",
+    "hint": "配置文生图、图生图、自拍使用的图像模型节点。节点 ID 需要和上方链路配置一致。",
+    "default": [],
+    "templates": {
+      "image_provider": {
+        "name": "图像节点",
+        "items": {
+          "id": {
+            "description": "节点 ID",
+            "type": "string",
+            "hint": "例如 node_1。链路配置里要填写同一个 ID。",
+            "default": ""
+          },
+          "api_type": {
+            "description": "接口模式",
+            "type": "string",
+            "options": [
+              "openai_image",
+              "openai_chat",
+              "gemini_official",
+              "custom_endpoint"
+            ],
+            "hint": "openai_image 适合标准图片接口；openai_chat 适合会返回图片链接的 chat/completions 中转站；gemini_official 使用 Google Gemini 官方 generateContent；custom_endpoint 为自定义完整路径，只请求你填写的完整 URL，不会追加 /v1、/images/generations 或 /chat/completions。",
+            "default": "openai_image"
+          },
+          "base_url": {
+            "description": "接口地址",
+            "type": "string",
+            "hint": "标准/对话模式通常填写 https://api.example.com/v1；Gemini 官方模式可留空或填写 https://generativelanguage.googleapis.com/v1beta；自定义模式必须填写完整请求路径，例如 https://api.example.com/v1/images/generations。",
+            "default": ""
+          },
+          "api_keys": {
+            "description": "API Keys",
+            "type": "text",
+            "hint": "可填写一个或多个 key，多个 key 建议按行填写。",
+            "default": ""
+          },
+          "model": {
+            "description": "当前模型",
+            "type": "string",
+            "hint": "当前默认使用的模型名，应同时存在于下方模型池中。Gemini 官方模式可填 gemini-3.1-flash-image-preview。",
+            "default": ""
+          },
+          "available_models": {
+            "description": "模型池",
+            "type": "list",
+            "hint": "可切换模型列表。每行一个模型名，例如 gpt-image-1。",
+            "default": []
+          },
+          "timeout": {
+            "description": "请求超时（秒）",
+            "type": "float",
+            "hint": "图片建议 120-300；较慢接口可调高。",
+            "default": 60
+          },
+          "default_size": {
+            "description": "默认尺寸",
+            "type": "string",
+            "hint": "留空使用调用参数或模型默认值。填写后，该节点每次调用默认使用此尺寸，例如 1024x1024；调用时传入 size 或 resolution 会优先生效。",
+            "default": ""
+          }
+        }
+      }
+    }
+  },
+  "video_providers": {
+    "description": "视频 Provider",
+    "type": "template_list",
+    "hint": "配置 /视频 指令和 LLM 视频工具使用的视频模型节点。",
+    "default": [],
+    "templates": {
+      "video_provider": {
+        "name": "视频节点",
+        "items": {
+          "id": {
+            "description": "节点 ID",
+            "type": "string",
+            "hint": "例如 video_node_1。链路配置里要填写同一个 ID。",
+            "default": ""
+          },
+          "api_type": {
+            "description": "调用协议",
+            "type": "string",
+            "options": [
+              "async_task",
+              "openai_sync",
+              "openai_chat"
+            ],
+            "hint": "async_task 为提交后轮询；openai_sync 为同步阻塞；openai_chat 为 chat/completions 伪装视频生成。",
+            "default": "async_task"
+          },
+          "base_url": {
+            "description": "接口地址",
+            "type": "string",
+            "hint": "通常需要包含 /v1 或 /v2，按你的中转站文档填写。",
+            "default": ""
+          },
+          "api_keys": {
+            "description": "API Keys",
+            "type": "text",
+            "hint": "可填写一个或多个 key，多个 key 建议按行填写。",
+            "default": ""
+          },
+          "model": {
+            "description": "当前模型",
+            "type": "string",
+            "hint": "当前默认使用的视频模型名。",
+            "default": ""
+          },
+          "available_models": {
+            "description": "视频模型池",
+            "type": "list",
+            "hint": "可切换视频模型列表。每行一个模型名。",
+            "default": []
+          },
+          "timeout": {
+            "description": "请求超时（秒）",
+            "type": "float",
+            "hint": "视频生成通常较慢，建议 300 或更高。",
+            "default": 300
+          },
+          "default_size": {
+            "description": "默认尺寸",
+            "type": "string",
+            "hint": "留空使用调用参数或模型默认值。填写后，该节点每次调用默认使用此尺寸，例如 1280x720；调用时传入 size 或 resolution 会优先生效。",
+            "default": ""
+          }
+        }
+      }
+    }
+  },
+  "persona_config": {
+    "description": "多组人设与参考图",
+    "type": "object",
+    "hint": "用于 /自拍。每个人设拥有独立名称、基础提示词和参考图组；active_persona_id 决定当前启用的人设。",
+    "items": {
+      "active_persona_id": {
+        "description": "当前启用人设 ID",
+        "type": "string",
+        "hint": "填写 profiles 中某个人设的 id，例如 default 或 persona_2。",
+        "default": "default"
+      },
+      "profiles": {
+        "description": "人设列表",
+        "type": "template_list",
+        "hint": "可添加多个人设。参考图可上传文件，也可保存 Pages 中已有的本地路径。",
+        "default": [
+          {
+            "__template_key": "persona",
+            "id": "default",
+            "persona_name": "默认助理",
+            "persona_base_prompt": "",
+            "persona_ref_image": []
+          }
+        ],
+        "templates": {
+          "persona": {
+            "name": "人设",
+            "items": {
+              "id": {
+                "description": "人设 ID",
+                "type": "string",
+                "hint": "建议使用英文、数字、下划线或短横线，例如 default、persona_2。",
+                "default": ""
+              },
+              "persona_name": {
+                "description": "人设名称",
+                "type": "string",
+                "hint": "显示名称，可用中文。",
+                "default": "默认助理"
+              },
+              "persona_base_prompt": {
+                "description": "人设基础描述",
+                "type": "text",
+                "hint": "长期固定的人物外貌、气质、服装习惯等描述。自拍时会和用户动作一起组合。",
+                "default": ""
+              },
+              "persona_ref_image": {
+                "description": "人设参考图组",
+                "type": "list",
+                "hint": "每行一个图片地址。支持 Pages 保存的本地路径、图片 URL、data:image，或下方“当前激活人设参考图上传入口”上传后生成的 files/... 路径。注意：AstrBot 原生配置页暂不支持在多条目模板内部直接上传文件。",
+                "default": []
+              }
+            }
+          }
+        }
+      },
+      "persona_name": {
+        "description": "当前人设名称（兼容字段）",
+        "type": "string",
+        "hint": "插件会自动同步为当前 active_persona_id 对应的人设名称。请优先在上方人设列表中编辑。",
+        "default": "默认助理",
+        "invisible": true
+      },
+      "persona_base_prompt": {
+        "description": "当前人设基础描述（兼容字段）",
+        "type": "text",
+        "hint": "插件会自动同步为当前 active_persona_id 对应的人设描述。请优先在上方人设列表中编辑。",
+        "default": "",
+        "invisible": true
+      },
+      "persona_ref_image": {
+        "description": "当前激活人设参考图上传入口",
+        "type": "file",
+        "hint": "这里用于 AstrBot 原生配置页上传图片。上传并保存后，插件会把文件同步到 active_persona_id 对应的人设参考图组；多个人设的参考图也可在上方人设列表中填写 paths/URL，或到 Pages / 插件配置中管理。",
+        "default": [],
+        "file_types": ["png", "jpg", "jpeg", "webp", "gif"]
+      }
+    }
+  },
+  "optimizer_config": {
+    "description": "副脑提示词优化",
+    "type": "object",
+    "hint": "副脑会把用户的简短描述整理成更适合图像模型理解的英文提示词。",
+    "items": {
+      "enable_optimizer": {
+        "description": "启用副脑",
+        "type": "bool",
+        "default": true
+      },
+      "use_astrbot_provider": {
+        "description": "使用 AstrBot 当前文本模型",
+        "type": "bool",
+        "hint": "开启后副脑通过 AstrBot 的当前 Chat Provider 生成提示词，不再把图像节点地址拼成 /v1/chat/completions。",
+        "default": false
+      },
+      "optimizer_style": {
+        "description": "内置风格",
+        "type": "string",
+        "options": [
+          "手机日常原生感",
+          "自拍专用极致真实",
+          "电影级光影大片",
+          "日系插画大师",
+          "3D 潮玩盲盒",
+          "自定义模式"
+        ],
+        "hint": "自拍建议使用“自拍专用极致真实”。选择自定义模式时请填写下方自定义风格提示词。",
+        "default": "手机日常原生感"
+      },
+      "chain_optimizer": {
+        "description": "副脑使用的图像 Provider 节点",
+        "type": "string",
+        "hint": "填写 providers 中可调用文本/对话模型的节点 ID，通常可复用图像节点。",
+        "default": "node_1"
+      },
+      "optimizer_model": {
+        "description": "副脑模型名",
+        "type": "string",
+        "hint": "用于优化提示词的模型名，例如 gpt-4o-mini、gemini-3-pro-preview。",
+        "default": "gpt-4o-mini"
+      },
+      "optimizer_timeout": {
+        "description": "副脑超时（秒）",
+        "type": "float",
+        "default": 15
+      },
+      "max_batch_count": {
+        "description": "一次请求最多生成几组提示词",
+        "type": "int",
+        "hint": "0 表示不启用批量扩写限制；需要副脑支持。",
+        "default": 0
+      },
+      "optimizer_custom_prompt": {
+        "description": "自定义风格提示词",
+        "type": "text",
+        "hint": "仅在风格选择“自定义模式”时使用。",
+        "default": ""
+      }
+    }
+  },
+  "presets": {
+    "description": "快捷预设",
+    "type": "list",
+    "hint": "格式：预设名:底层提示词。例如 写真:daily smartphone portrait。",
+    "default": []
+  },
+  "pose_library_config": {
+    "description": "姿势图库（LLM 自主维护）",
+    "type": "object",
+    "hint": "LLM 可通过 search_pose_image 工具搜索姿势参考图（本地优先，未命中自动联网下载入库），供 ControlNet 画图使用。",
+    "items": {
+      "enable": {
+        "description": "启用姿势图库",
+        "type": "bool",
+        "hint": "关闭后 search_pose_image 工具不可用。",
+        "default": true
+      },
+      "source": {
+        "description": "图源",
+        "type": "string",
+        "options": ["gelbooru", "rule34"],
+        "hint": "gelbooru 偏 SFW；rule34 包含 NSFW 内容，适合成人场景。",
+        "default": "gelbooru"
+      },
+      "enable_quality_check": {
+        "description": "启用 vision 质检",
+        "type": "bool",
+        "hint": "开启后下载的姿势图会经 vision 模型判断是否适合作为姿势参考图，不合格自动跳过。",
+        "default": true
+      },
+      "max_download_per_search": {
+        "description": "每次搜索下载上限",
+        "type": "int",
+        "hint": "单次 search_pose_image 最多下载入库的图片张数，1-10。",
+        "default": 5
+      },
+      "api_user_id": {
+        "description": "Rule34 API user_id",
+        "type": "text",
+        "hint": "图源选 rule34 时填写。在 https://rule34.xxx/index.php?page=account&s=options 账户选项页获取。留空则匿名请求（限制较严）。",
+        "default": ""
+      },
+      "api_key": {
+        "description": "Rule34 API Key",
+        "type": "text",
+        "hint": "图源选 rule34 时填写。与 user_id 配套使用，获取地址同上。",
+        "default": ""
+      },
+      "quality_provider": {
+        "description": "质检/翻译使用的 Provider 节点 ID",
+        "type": "string",
+        "hint": "选择 providers 中支持 vision 的节点",
+        "_special": "select_provider",
+        "default": ""
+
+      }
+    }
+  },
+  "verbose_report": {
+    "description": "输出详细调试日志",
+    "type": "bool",
+    "hint": "排查接口耗时、发送耗时、链路问题时可开启；日常使用建议关闭。",
+    "default": false
+  },
+  "show_generation_time": {
+    "description": "成功后显示生成耗时",
+    "type": "bool",
+    "hint": "开启后，/画、宏指令、/自拍 和 /视频 指令成功返回时会附带本次生成耗时。",
+    "default": false
+  },
+  "show_request_model": {
+    "description": "成功后显示请求模型",
+    "type": "bool",
+    "hint": "开启后，/画、宏指令、/自拍 和 /视频 指令成功返回时会附带实际成功节点使用的模型名。",
+    "default": false
+  }
+}
